@@ -1,0 +1,96 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOX-ing | Shadow Boxing Prototype</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Shadow Boxing Lab</p>
+          <h1>BOX-ing</h1>
+          <p class="subtitle">
+            Camera-driven boxing prototype with jab and block detection, multiplayer
+            rooms, and live leaderboards.
+          </p>
+        </div>
+        <div class="status-card">
+          <p class="label">Backend</p>
+          <p id="backendStatus" class="status">Checking...</p>
+          <p class="label">Session</p>
+          <p id="sessionStatus" class="status">Not started</p>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="video-panel">
+          <div class="video-wrap">
+            <video id="localVideo" autoplay playsinline muted></video>
+            <canvas id="overlay"></canvas>
+            <div class="video-badge">Camera Feed</div>
+          </div>
+
+          <div class="controls">
+            <button id="startCam" class="primary">Start Camera</button>
+            <button id="stopCam" class="ghost">Stop Camera</button>
+            <button id="startMatch" class="primary">Start Match</button>
+            <button id="joinMatch" class="ghost">Join Room</button>
+            <button id="submitScore" class="ghost">Submit Score</button>
+          </div>
+
+          <div class="action-buttons">
+            <button id="jabButton">Send Jab</button>
+            <button id="blockButton">Send Block</button>
+          </div>
+        </section>
+
+        <section class="info-panel">
+          <div class="card">
+            <h2>Player Setup</h2>
+            <label>
+              Player Name
+              <input id="playerName" type="text" placeholder="Neo" />
+            </label>
+            <label>
+              Room Code
+              <input id="roomCode" type="text" placeholder="ALPHA" />
+            </label>
+            <label>
+              API Base URL
+              <input id="apiBase" type="text" placeholder="http://localhost:8000" />
+            </label>
+            <p class="hint">Tip: append <code>?api=http://localhost:8000</code> to override.</p>
+          </div>
+
+          <div class="card">
+            <h2>Scoreboard</h2>
+            <div class="stat">
+              <span>Points</span>
+              <strong id="points">0</strong>
+            </div>
+            <div class="stat">
+              <span>Last Action</span>
+              <strong id="lastAction">None</strong>
+            </div>
+            <div class="stat">
+              <span>Velocity</span>
+              <strong id="velocity">0</strong>
+            </div>
+            <div class="log" id="eventLog"></div>
+          </div>
+
+          <div class="card">
+            <h2>Leaderboard</h2>
+            <ol id="leaderboard"></ol>
+            <button id="refreshLeaderboard" class="ghost">Refresh</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
