@@ -1,5 +1,8 @@
-﻿const elements = {
+import { startMediaPipe, stopMediaPipe } from "./mediapipe.js";
+
+const elements = {
   backendStatus: document.getElementById("backendStatus"),
+  mediapipeStatus: document.getElementById("mediapipeStatus"),
   sessionStatus: document.getElementById("sessionStatus"),
   startCam: document.getElementById("startCam"),
   stopCam: document.getElementById("stopCam"),
@@ -29,6 +32,12 @@ elements.apiBase.value = defaultApiBase;
 let cameraStream = null;
 let sessionId = null;
 let overlayFrame = null;
+let mediapipeActive = false;
+
+const latestResults = {
+  hands: null,
+  pose: null,
+};
 
 function getApiBase() {
   return elements.apiBase.value.trim() || defaultApiBase;
@@ -84,6 +93,7 @@ async function startCamera() {
     await elements.localVideo.play();
     resizeOverlay();
     startOverlayLoop();
+    await startMediaPipePipeline();
     logEvent("Camera started.");
   } catch (error) {
     logEvent(`Camera error: ${error.message}`);
@@ -95,6 +105,11 @@ function stopCamera() {
     cameraStream.getTracks().forEach((track) => track.stop());
     cameraStream = null;
   }
+  stopMediaPipe();
+  mediapipeActive = false;
+  latestResults.hands = null;
+  latestResults.pose = null;
+  setStatus(elements.mediapipeStatus, "Stopped", true);
   stopOverlayLoop();
   logEvent("Camera stopped.");
 }
@@ -122,6 +137,8 @@ function startOverlayLoop() {
     ctx.lineTo(width * 0.7, height * 0.5);
     ctx.stroke();
 
+    renderLandmarks(ctx);
+
     overlayFrame = requestAnimationFrame(draw);
   };
   draw();
@@ -134,6 +151,59 @@ function stopOverlayLoop() {
   }
 }
 
+
+async function startMediaPipePipeline() {
+  if (mediapipeActive) {
+    return;
+  }
+
+  const config = window.MEDIAPIPE_CONFIG || {};
+
+  try {
+    mediapipeActive = true;
+    await startMediaPipe({
+      video: elements.localVideo,
+      config,
+      onStatus: (text, ok) => setStatus(elements.mediapipeStatus, text, ok),
+      onResults: (results) => {
+        latestResults.hands = results.hands;
+        latestResults.pose = results.pose;
+      },
+    });
+  } catch (error) {
+    mediapipeActive = false;
+    logEvent(`MediaPipe error: ${error.message}`);
+  }
+}
+
+function renderLandmarks(ctx) {
+  const { width, height } = elements.overlay;
+  if (!width || !height) {
+    return;
+  }
+
+  const drawPoints = (landmarks, color, radius = 3) => {
+    ctx.fillStyle = color;
+    landmarks.forEach((point) => {
+      ctx.beginPath();
+      ctx.arc(point.x * width, point.y * height, radius, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  };
+
+  if (latestResults.pose?.landmarks?.length) {
+    latestResults.pose.landmarks.forEach((pose) => {
+      drawPoints(pose, "rgba(148, 163, 184, 0.8)", 2);
+    });
+  }
+
+  if (latestResults.hands?.landmarks?.length) {
+    const colors = ["rgba(249, 115, 22, 0.9)", "rgba(14, 165, 233, 0.9)"];
+    latestResults.hands.landmarks.forEach((hand, index) => {
+      drawPoints(hand, colors[index % colors.length], 3);
+    });
+  }
+}
 async function startMatch(mode = "solo") {
   try {
     const payload = {
