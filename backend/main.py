@@ -101,31 +101,35 @@ def get_session(session_id: str) -> dict:
 
 @app.post("/session/action")
 def record_action(payload: ActionEvent) -> dict:
-    session = SESSIONS.get(payload.session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
     action_type = payload.action_type.lower().strip()
     if action_type not in {"jab", "block"}:
         raise HTTPException(status_code=400, detail="action_type must be jab or block")
 
     points = compute_points(action_type, payload.velocity or 0.0)
-    session["points"] += points
-    session["last_action"] = {
+    last_action = {
         "action_type": action_type,
         "velocity": payload.velocity or 0.0,
         "points": points,
         "time": utc_now(),
     }
-    SESSIONS[payload.session_id] = session
 
-    update_leaderboard(session)
+    updated = sessions_col.find_one_and_update(
+        {"id": payload.session_id},
+        {"$inc": {"points": points}, "$set": {"last_action": last_action}},
+        projection={"_id": 0},
+        return_document=True,
+    )
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    update_leaderboard(updated)
 
     return {
         "session_id": payload.session_id,
         "action_type": action_type,
         "points": points,
-        "total_points": session["points"],
+        "total_points": updated["points"],
         "time": utc_now(),
     }
 
