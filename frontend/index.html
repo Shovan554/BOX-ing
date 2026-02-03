@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Box-ing</title>
+    <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+    <div id="app">
+        <h1 class="title" id="game-title">
+            <span>B</span><span>O</span><span>X</span><span>I</span><span>N</span><span>G</span>
+        </h1>
+
+        <main id="home-screen">
+            <div class="controls">
+                <button id="start-btn">Start Game</button>
+            </div>
+        </main>
+
+        <div id="menu-screen" class="hidden">
+            <div class="menu-bar">
+                <button class="menu-item">PLAY</button>
+                <button class="menu-item">LEADERBOARD</button>
+                <button class="menu-item">SETTINGS</button>
+                <button class="menu-item">CREATE ROOM</button>
+                <button class="menu-item">QUIT</button>
+            </div>
+        </div>
+
+        <div id="game-container"></div>
+    </div>
+    <div id="footer-container"></div>
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
