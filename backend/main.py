@@ -3,7 +3,7 @@ from db import sessions_col, leaderboard_col
 
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -127,6 +127,10 @@ def record_action(payload: ActionEvent) -> dict:
     if action_type not in {"jab", "block"}:
         raise HTTPException(status_code=400, detail="action_type must be jab or block")
 
+    session = SESSIONS.get(payload.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
     points = compute_points(action_type, payload.velocity or 0.0)
     last_action = {
         "action_type": action_type,
@@ -146,12 +150,15 @@ def record_action(payload: ActionEvent) -> dict:
 
     updated = serialize_mongo(updated)
     update_leaderboard(updated)
+    session["points"] += points
+    session["last_action"] = last_action
+    update_leaderboard(session)
 
     return {
         "session_id": payload.session_id,
         "action_type": action_type,
         "points": points,
-        "total_points": updated["points"],
+        "total_points": session["points"],
         "time": utc_now(),
     }
 
