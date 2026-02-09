@@ -1,4 +1,6 @@
 ﻿from __future__ import annotations
+from db import sessions_col, leaderboard_col
+
 
 from datetime import datetime, timezone
 from typing import Dict, Optional
@@ -85,19 +87,39 @@ def start_session(payload: SessionStart) -> dict:
         "room_code": payload.room_code,
         "points": 0,
         "created_at": utc_now(),
+        "ended_at": None,
         "last_action": None,
     }
-    SESSIONS[session_id] = session
+
+    sessions_col.insert_one(session.copy())  # <-- prevents pymongo from adding _id to the dict you return
     return session
+
+
+
+from bson import ObjectId
+
+def serialize_mongo(obj):
+    """Recursively convert MongoDB ObjectId(s) to string so FastAPI can return JSON."""
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: serialize_mongo(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [serialize_mongo(v) for v in obj]
+    return obj
 
 
 @app.get("/session/{session_id}")
 def get_session(session_id: str) -> dict:
-    session = SESSIONS.get(session_id)
+    session = sessions_col.find_one({"id": session_id})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    return session
 
+    return serialize_mongo(session)
+
+
+
+from pymongo import ReturnDocument
 
 @app.post("/session/action")
 def record_action(payload: ActionEvent) -> dict:
@@ -117,6 +139,17 @@ def record_action(payload: ActionEvent) -> dict:
         "time": utc_now(),
     }
 
+    updated = sessions_col.find_one_and_update(
+        {"id": payload.session_id},
+        {"$inc": {"points": points}, "$set": {"last_action": last_action}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    updated = serialize_mongo(updated)
+    update_leaderboard(updated)
     session["points"] += points
     session["last_action"] = last_action
     update_leaderboard(session)
@@ -130,20 +163,35 @@ def record_action(payload: ActionEvent) -> dict:
     }
 
 
+
 @app.post("/session/submit")
 def submit_session(payload: SessionSubmit) -> dict:
-    session = SESSIONS.get(payload.session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    session["ended_at"] = utc_now()
-    update_leaderboard(session)
-    return {"session_id": payload.session_id, "final_points": session["points"]}
+    updated = sessions_col.find_one_and_update(
+        {"id": payload.session_id},
+        {"$set": {"ended_at": utc_now()}},
+        return_document=ReturnDocument.AFTER,
+    )
 
+    if not updated:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    updated = serialize_mongo(updated)
+    update_leaderboard(updated)
+
+    return {
+        "session_id": payload.session_id,
+        "final_points": updated["points"]
+    }
 
 @app.get("/leaderboard")
 def leaderboard(limit: int = 10) -> dict:
-    leaders = sorted(LEADERBOARD.values(), key=lambda item: item["points"], reverse=True)
-    return {"leaders": leaders[: max(1, min(limit, 50))]}
+    limit = max(1, min(limit, 50))
+    leaders = leaderboard_col.find().sort("points", -1).limit(limit)
+
+    return {
+        "leaders": [serialize_mongo(doc) for doc in leaders]
+    }
+
 
 
 @app.post("/webrtc/offer")
@@ -157,15 +205,20 @@ def webrtc_offer(payload: WebRTCOffer) -> dict:
 
 def update_leaderboard(session: dict) -> None:
     player = session.get("player_name") or "Player"
-    current = LEADERBOARD.get(player)
     record = {
         "player_name": player,
         "points": session["points"],
         "mode": session.get("mode"),
         "updated_at": utc_now(),
     }
-    if not current or record["points"] >= current["points"]:
-        LEADERBOARD[player] = record
+
+    current = leaderboard_col.find_one({"player_name": player}, {"_id": 0})
+    if (not current) or (record["points"] >= current.get("points", 0)):
+        leaderboard_col.update_one(
+            {"player_name": player},
+            {"$set": record},
+            upsert=True
+        )
 
 
 if __name__ == "__main__":
