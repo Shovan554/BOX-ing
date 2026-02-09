@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MONGODB_URI = os.getenv("MONGODB_URI")
-DB_NAME = os.getenv("DB_NAME", "shadowboxing_dev")
+DB_NAME = os.getenv("DB_NAME", "userdata")
 
 if not MONGODB_URI:
     raise RuntimeError("MONGODB_URI is not set. Put it in your .env file")
@@ -16,3 +16,4 @@ db = client[DB_NAME]
 users_col = db["users"]
 sessions_col = db["sessions"]
 events_col = db["events"]
+leaderboard_col = db["leaderboard"]
