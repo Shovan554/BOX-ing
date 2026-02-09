@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -105,6 +105,10 @@ def record_action(payload: ActionEvent) -> dict:
     if action_type not in {"jab", "block"}:
         raise HTTPException(status_code=400, detail="action_type must be jab or block")
 
+    session = SESSIONS.get(payload.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
     points = compute_points(action_type, payload.velocity or 0.0)
     last_action = {
         "action_type": action_type,
@@ -113,23 +117,15 @@ def record_action(payload: ActionEvent) -> dict:
         "time": utc_now(),
     }
 
-    updated = sessions_col.find_one_and_update(
-        {"id": payload.session_id},
-        {"$inc": {"points": points}, "$set": {"last_action": last_action}},
-        projection={"_id": 0},
-        return_document=True,
-    )
-
-    if not updated:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    update_leaderboard(updated)
+    session["points"] += points
+    session["last_action"] = last_action
+    update_leaderboard(session)
 
     return {
         "session_id": payload.session_id,
         "action_type": action_type,
         "points": points,
-        "total_points": updated["points"],
+        "total_points": session["points"],
         "time": utc_now(),
     }
 
