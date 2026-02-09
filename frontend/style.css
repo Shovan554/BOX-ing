@@ -10,7 +10,7 @@ body, html {
     height: 100%;
     overflow: hidden;
     font-family: 'GameFont', sans-serif;
-    background: url('./assets/images/background.jpg') no-repeat center center fixed;
+    background: url('./assets/images/background4.png') no-repeat center center fixed;
     background-size: 110% 110%;
     transition: background-position 0.1s ease-out;
 }
@@ -42,7 +42,7 @@ body, html {
     margin-bottom: 2rem;
     display: flex;
     justify-content: center;
-    background: white;
+    background: red;
     -webkit-background-clip: text;
     background-clip: text;
     color: #ff9100; /* Fallback color */
@@ -103,7 +103,28 @@ body, html {
     width: 100%;
     display: flex;
     justify-content: center;
+    align-items: center;
     z-index: 20;
+}
+
+.menu-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    position: relative;
+}
+
+#granny-container {
+    position: absolute;
+    left: calc(50% - 800px);
+    width: 500px;
+    height: 800px;
+    background: transparent;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    animation: menuSlideIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
 }
 
 .menu-bar {
