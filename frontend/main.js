@@ -53,7 +53,11 @@ let grannyModel;
 let mixer;
 let clock;
 
-let idleAction = null;
+const idleActions = {
+    left: null,
+    right: null,
+};
+let activeIdleSide = 'right';
 let currentAction = null;
 let actionResetTimer = null;
 const combatActions = {};
@@ -179,9 +183,92 @@ function sendActionToBackend(actionType, speedNorm) {
         });
 }
 
+function normalizeClipName(name) {
+    return String(name || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+function findClipByAliases(clips, aliases) {
+    if (!Array.isArray(clips) || clips.length === 0) return null;
+    const normalizedAliases = aliases.map((alias) => normalizeClipName(alias));
+
+    for (const clip of clips) {
+        const clipName = normalizeClipName(clip.name);
+        if (normalizedAliases.includes(clipName)) {
+            return clip;
+        }
+    }
+
+    for (const clip of clips) {
+        const clipName = normalizeClipName(clip.name);
+        if (normalizedAliases.some((alias) => clipName.includes(alias))) {
+            return clip;
+        }
+    }
+
+    return null;
+}
+
+function getIdleActionForSide(side) {
+    if (side === 'left' && idleActions.left) return idleActions.left;
+    if (side === 'right' && idleActions.right) return idleActions.right;
+    return idleActions.right || idleActions.left || null;
+}
+
+function setIdleSideFromActionKey(actionKey) {
+    if (actionKey.startsWith('left_')) {
+        activeIdleSide = 'left';
+    } else if (actionKey.startsWith('right_')) {
+        activeIdleSide = 'right';
+    }
+}
+
+function playIdleForActiveSide() {
+    const nextIdle = getIdleActionForSide(activeIdleSide);
+    if (!nextIdle) return;
+
+    if (currentAction && currentAction !== nextIdle) {
+        currentAction.fadeOut(0.1);
+    }
+
+    nextIdle.enabled = true;
+    nextIdle.reset();
+    nextIdle.setLoop(THREE.LoopRepeat, Infinity);
+    nextIdle.fadeIn(0.1);
+    nextIdle.play();
+    currentAction = nextIdle;
+}
+
+function setupIdleActions(clips) {
+    if (!mixer || !grannyModel || !Array.isArray(clips) || clips.length === 0) {
+        return;
+    }
+
+    const rightIdleClip = findClipByAliases(clips, ['right idle', 'right_idle', 'idle_right']);
+    const leftIdleClip = findClipByAliases(clips, ['left idle', 'left_idle', 'idle left', 'idle']);
+
+    const fallbackClip = clips[0];
+    const resolvedRight = rightIdleClip || leftIdleClip || fallbackClip;
+    const resolvedLeft = leftIdleClip || rightIdleClip || fallbackClip;
+
+    idleActions.right = mixer.clipAction(resolvedRight, grannyModel);
+    idleActions.left = mixer.clipAction(resolvedLeft, grannyModel);
+
+    idleActions.right.clampWhenFinished = false;
+    idleActions.left.clampWhenFinished = false;
+
+    activeIdleSide = idleActions.right ? 'right' : 'left';
+    playIdleForActiveSide();
+
+    updateStatus(`Idle clips: right=${resolvedRight.name || 'unknown'}, left=${resolvedLeft.name || 'unknown'}`);
+}
+
 function playCombatAnimation(actionKey) {
     const nextAction = combatActions[actionKey];
     if (!mixer || !nextAction) return;
+    setIdleSideFromActionKey(actionKey);
 
     if (currentAction && currentAction !== nextAction) {
         currentAction.fadeOut(0.08);
@@ -200,12 +287,8 @@ function playCombatAnimation(actionKey) {
 
     const durationMs = Math.max(300, nextAction.getClip().duration * 900);
     actionResetTimer = window.setTimeout(() => {
-        if (!idleAction) return;
         nextAction.fadeOut(0.1);
-        idleAction.reset();
-        idleAction.fadeIn(0.1);
-        idleAction.play();
-        currentAction = idleAction;
+        playIdleForActiveSide();
     }, durationMs);
 }
 
@@ -594,12 +677,7 @@ function initGrannyModel() {
         grannyModel.position.y = -box.min.y;
 
         mixer = new THREE.AnimationMixer(grannyModel);
-        if (gltf.animations && gltf.animations.length > 0) {
-            idleAction = mixer.clipAction(gltf.animations[0], grannyModel);
-            idleAction.setLoop(THREE.LoopRepeat, Infinity);
-            idleAction.play();
-            currentAction = idleAction;
-        }
+        setupIdleActions(gltf.animations || []);
 
         await loadCombatClips();
     });
