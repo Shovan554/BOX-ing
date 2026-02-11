@@ -84,7 +84,7 @@ def start_session(payload: SessionStart) -> dict:
         "id": session_id,
         "player_name": payload.player_name.strip() or "Player",
         "mode": payload.mode,
-        "room_code": payload.room_code,
+        "room_code": payload.room_code,x
         "points": 0,
         "created_at": utc_now(),
         "ended_at": None,
