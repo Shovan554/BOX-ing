@@ -143,6 +143,8 @@ def record_action(payload: ActionEvent) -> dict:
         {"id": payload.session_id},
         {"$inc": {"points": points}, "$set": {"last_action": last_action}},
         return_document=ReturnDocument.AFTER,
+        projection={"_id": 0},
+        return_document=True,
     )
 
     if not updated:
@@ -153,6 +155,7 @@ def record_action(payload: ActionEvent) -> dict:
     session["points"] += points
     session["last_action"] = last_action
     update_leaderboard(session)
+    update_leaderboard(updated)
 
     return {
         "session_id": payload.session_id,
