@@ -1,7 +1,11 @@
+'''This module sets up the connection to the MongoDB database and defines the collections used in the application.
+It uses the `pymongo` library to connect to MongoDB and the `dotenv` library to load environment variables from a `.env` file.
+The MongoDB URI and database name are read from environment variables, and the collections for users, sessions, 
+events, and leaderboard are initialized for use in the application.'''
+
 import os
 from pymongo import MongoClient
 from dotenv import load_dotenv
-
 load_dotenv()
 
 MONGODB_URI = os.getenv("MONGODB_URI")
