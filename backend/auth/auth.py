@@ -16,11 +16,10 @@ pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 # The SECRET_KEY is read from the environment variable and is used to sign and verify JWT tokens. If it is not set, a RuntimeError is raised.
 SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY is not set in environment")
-
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
+ALGORITHM = os.getenv("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(
+    os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440")
+)
 
 # The hash_password function takes a plain text password as 
 # input and returns a hashed version of the password using the configured CryptContext.
