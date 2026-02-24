@@ -1,20 +1,32 @@
-﻿# BOX-ing Backend (Placeholder)
+# BOX-ing Backend
 
-Quick start:
+Modular FastAPI backend for real-time gesture detection and session management.
 
-1. Create a virtual environment.
-2. Install dependencies:
+## Prerequisites
+- Python 3.8+
+- pip
 
+## Setup & Execution
+
+1. **Install Dependencies**:
+   ```bash
    pip install -r requirements.txt
+   ```
 
-3. Run the API:
+2. **Run the Server**:
+   ```bash
+   python main.py
+   ```
 
-   uvicorn main:app --reload --host 0.0.0.0 --port 8000
+## Modular Structure
+- `main.py`: Entry point and middleware configuration.
+- `state.py`: Centralized state (Sessions, Leaderboard) and shared helpers.
+- `routes/`:
+  - `detection.py`: WebSocket-based real-time jab and block detection.
+  - `sessions.py`: REST endpoints for session initialization and leaderboard data.
 
-Endpoints:
-- GET /health
-- POST /session/start
-- POST /session/action
-- POST /session/submit
-- GET /leaderboard
-- POST /webrtc/offer (placeholder)
+## API Endpoints
+- **GET** `/`: Health check.
+- **POST** `/session/start`: Initialize a new game session.
+- **GET** `/leaderboard`: Retrieve high scores.
+- **WS** `/ws/detect/{session_id}`: Real-time landmark processing.

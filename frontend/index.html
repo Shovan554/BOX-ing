@@ -1,39 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Box-ing</title>
-    <link rel="stylesheet" href="./style.css">
-</head>
-<body>
-    <div id="app">
-        <h1 class="title" id="game-title">
-            <span style="--i:0">B</span><span style="--i:1">O</span><span style="--i:2">X</span><span style="--i:3">I</span><span style="--i:4">N</span><span style="--i:5">G</span>
-        </h1>
-
-        <main id="home-screen">
-            <div class="controls">
-                <button id="start-btn">Start Game</button>
-            </div>
-        </main>
-
-        <div id="menu-screen" class="hidden">
-            <div class="menu-container">
-                <div id="granny-container"></div>
-                <div class="menu-bar">
-                    <button class="menu-item">PLAY</button>
-                    <button class="menu-item">LEADERBOARD</button>
-                    <button class="menu-item">SETTINGS</button>
-                    <button class="menu-item">CREATE ROOM</button>
-                    <button class="menu-item">QUIT</button>
-                </div>
-            </div>
-        </div>
-
-        <div id="game-container"></div>
-    </div>
-    <div id="footer-container"></div>
-    <script type="module" src="./main.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BOX-ing</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>
