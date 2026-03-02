@@ -1,7 +1,7 @@
 import math
 import time
 from collections import deque
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
@@ -10,10 +10,6 @@ from state import SESSIONS, compute_points
 
 router = APIRouter()
 
-
-# -------------------------
-# Models
-# -------------------------
 
 class Landmark(BaseModel):
     x: float
@@ -28,137 +24,85 @@ class HandData(BaseModel):
     timestamp: float
 
 
-# -------------------------
-# Detection Logic
-# -------------------------
-
 class CombatDetector:
-    """
-    Boxing detection for a player FACING the camera.
+    """Detect hit, block, and idle events from pose and hand landmarks."""
 
-    Key design decisions:
-    ─────────────────────
-    BLOCK
-      • Both wrists joined/touching anywhere in front of the body.
-      • Uses raw wrist-to-wrist distance normalized by shoulder width.
-      • No face-proximity requirement — just wrists together + both fists.
-
-    HIT (left / right)
-      • Straight jab toward camera → primary signal is DECREASING Z on the wrist.
-      • Secondary: outward radial extension from shoulder.
-      • State machine: ready → launching → recover
-        "launching" is entered when wrist starts moving forward (z drops).
-        Hit is confirmed when z-velocity exceeds threshold AND extension is enough.
-      • Fist required (hand landmarks).
-      • MIRROR CORRECTION: MediaPipe Hands labels are mirrored for camera-facing
-        players. "Left" from the model = player's RIGHT hand. Corrected below.
-
-    IDLE
-      • Both wrists slow and not extended.
-    """
-
-    # ── Mirror correction ──────────────────────────────────────────────────────
-    # When the player faces the camera MediaPipe Hands reports:
-    #   "Left"  label → player's RIGHT hand
-    #   "Right" label → player's LEFT hand
-    # Set to False only if your pipeline already corrects this.
+    # When a player faces the camera, MediaPipe Hands labels are mirrored.
     CAMERA_FACING_MIRROR = True
 
-    def __init__(self, history_len: int = 25):
+    def __init__(self, history_len: int = 30) -> None:
+        # Visibility thresholds
+        self.shoulder_vis_threshold = 0.45
+        self.wrist_vis_threshold = 0.20
 
-        # Visibility gate
-        self.vis_threshold = 0.40
+        # Timing windows
+        self.hit_cooldown_ms = 380
+        self.block_cooldown_ms = 500
+        self.post_block_suppress_ms = 420
+        self.post_block_settle_ms = 110
+        self.fist_memory_ms = 250
+        self.launch_timeout_ms = 500
 
-        # ── Cooldowns (ms) ────────────────────────────────────────────────────
-        self.hit_cooldown_ms          = 450
-        self.block_cooldown_ms        = 600
-        self.post_block_suppress_ms   = 500   # suppress hits right after block release
-        self.post_block_settle_ms     = 120
+        # Block thresholds
+        self.block_touch_ratio = 0.68
+        self.block_strong_touch_ratio = 0.52
+        self.block_face_ratio = 1.25
+        self.block_center_ratio = 0.78
+        self.block_forward_z_margin = 0.12
+        self.block_hold_frames_required = 2
+        self.block_release_frames_required = 2
 
-        self.suppress_hits_until  = 0.0
-        self.settle_until         = 0.0
+        # Punch thresholds
+        self.ext_idle = 1.02
+        self.ext_launch = 1.08
+        self.ext_confirm = 1.16
+        self.ext_max = 1.95
+        self.min_forward_vz = 0.18
+        self.min_total_speed = 0.65
+        self.min_radial_speed = 0.10
+        self.min_z_travel = 0.014
 
-        # ── Block thresholds ──────────────────────────────────────────────────
-        # Wrist-to-wrist distance as fraction of shoulder width.
-        # "touching / joined" — give some slack for camera noise.
-        self.block_wrist_touch_ratio  = 0.45
+        # Idle thresholds
+        self.idle_ext = 1.08
+        self.idle_speed = 0.35
 
-        # ── Extension thresholds (wrist–shoulder / shoulder_width) ────────────
-        self.ext_idle     = 1.00   # arm at rest / guard
-        self.ext_launch   = 1.05   # arm starts pushing out → enter "launching"
-        self.ext_confirm  = 1.15   # minimum extension for a valid hit
-        self.ext_max      = 1.80   # ignore tracking glitches above this
+        self.suppress_hits_until = 0.0
+        self.settle_until = 0.0
 
-        # ── Velocity gates ────────────────────────────────────────────────────
-        # Z velocity: in MediaPipe, z decreases as wrist moves toward camera.
-        # Threshold is in raw landmark units/second (not shoulder-normalized,
-        # because sh_width is an XY measure and z scale differs).
-        self.min_z_velocity   = 0.25   # tune up if false positives, down if misses
-        self.min_total_speed  = 0.80   # normalized XY speed (/ sh_width)
-        self.min_radial_speed = 0.20   # normalized radial outward component
-
-        # ── Idle definition ───────────────────────────────────────────────────
-        self.idle_ext   = 1.05
-        self.idle_speed = 0.40   # normalized XY speed
-
-        # ── History: deque of (ts_ms, wrist_lm, shoulder_lm, nose_lm) ────────
         self.history: Dict[str, deque] = {
-            "left":  deque(maxlen=history_len),
+            "left": deque(maxlen=history_len),
             "right": deque(maxlen=history_len),
         }
 
-        # ── State machine per hand ────────────────────────────────────────────
-        # States: "ready" → "launching" → "recover"
-        self.state:    Dict[str, str]   = {"left": "ready", "right": "ready"}
-        self.peak_ext: Dict[str, float] = {"left": 0.0,     "right": 0.0}
-        self.launch_z: Dict[str, float] = {"left": 0.0,     "right": 0.0}
+        self.state: Dict[str, str] = {"left": "ready", "right": "ready"}
+        self.peak_ext: Dict[str, float] = {"left": 0.0, "right": 0.0}
+        self.launch_z: Dict[str, float] = {"left": 0.0, "right": 0.0}
+        self.launch_ts: Dict[str, float] = {"left": 0.0, "right": 0.0}
 
-        # ── Last action timestamps ────────────────────────────────────────────
         self.last_action_ts: Dict[str, float] = {
-            "left": 0.0, "right": 0.0, "block": 0.0
+            "left": 0.0,
+            "right": 0.0,
+            "block": 0.0,
         }
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Geometry helpers
-    # ══════════════════════════════════════════════════════════════════════════
+        self.fist_state: Dict[str, bool] = {"left": False, "right": False}
+        self.fist_state_ts: Dict[str, float] = {"left": 0.0, "right": 0.0}
+
+        self.block_active = False
+        self.block_hold_count = 0
+        self.block_release_count = 0
+
+    @staticmethod
+    def _visibility(lm: Landmark) -> float:
+        return 1.0 if lm.visibility is None else lm.visibility
 
     @staticmethod
     def _dist2d(a: Landmark, b: Landmark) -> float:
-        return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
+        return math.hypot(a.x - b.x, a.y - b.y)
 
     @staticmethod
     def _dist3d(a: Landmark, b: Landmark) -> float:
         return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Fist detection (hand landmarks)
-    # ══════════════════════════════════════════════════════════════════════════
-
-    def is_fist(self, hand_lms: List[Landmark]) -> bool:
-        if len(hand_lms) < 21:
-            return False
-
-        # Thumb: all three consecutive segment lengths must be short (folded)
-        thumb_joints = [hand_lms[1], hand_lms[2], hand_lms[3], hand_lms[4]]
-        for i in range(len(thumb_joints) - 1):
-            if self._dist3d(thumb_joints[i], thumb_joints[i + 1]) > 0.12:
-                return False
-
-        # Four fingers: tip close to PIP and PIP close to MCP (curled)
-        for tip_id in [8, 12, 16, 20]:
-            tip = hand_lms[tip_id]
-            pip = hand_lms[tip_id - 2]
-            mcp = hand_lms[tip_id - 3]
-            if self._dist3d(tip, pip) > 0.20:
-                return False
-            if self._dist3d(pip, mcp) > 0.20:
-                return False
-
-        return True
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # Handedness → body side (with mirror correction)
-    # ══════════════════════════════════════════════════════════════════════════
 
     @staticmethod
     def _raw_label(handedness_entry: List[dict]) -> Optional[str]:
@@ -166,54 +110,114 @@ class CombatDetector:
             return None
         cat = handedness_entry[0]
         label = (
-            cat.get("category_name") or
-            cat.get("label")         or
-            cat.get("categoryName") or
-            cat.get("handedness")
+            cat.get("category_name")
+            or cat.get("label")
+            or cat.get("categoryName")
+            or cat.get("handedness")
         )
         return label.strip().title() if label else None
 
-    def _extract_fists(self, hand_data: Optional[HandData]) -> Dict[str, bool]:
-        """Returns {body_side: is_fist} with camera-mirror correction applied."""
-        fists = {"left": False, "right": False}
+    @staticmethod
+    def _hand_score(handedness_entry: List[dict]) -> float:
+        if not handedness_entry:
+            return 0.0
+        cat = handedness_entry[0]
+        score = cat.get("score") or cat.get("confidence") or cat.get("probability") or 0.0
+        try:
+            return float(score)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def is_fist(self, hand_lms: List[Landmark]) -> bool:
+        """Scale-aware fist check that survives hand-size and depth variation."""
+        if len(hand_lms) < 21:
+            return False
+
+        wrist = hand_lms[0]
+        palm_size = (
+            self._dist3d(hand_lms[0], hand_lms[9]) + self._dist3d(hand_lms[5], hand_lms[17])
+        ) * 0.5
+
+        if palm_size < 1e-5:
+            return False
+
+        curled_count = 0
+        for tip, pip, mcp in ((8, 6, 5), (12, 10, 9), (16, 14, 13), (20, 18, 17)):
+            tip_to_wrist = self._dist3d(hand_lms[tip], wrist)
+            pip_to_wrist = self._dist3d(hand_lms[pip], wrist)
+            tip_to_mcp = self._dist3d(hand_lms[tip], hand_lms[mcp])
+
+            finger_curled = tip_to_wrist < (pip_to_wrist * 1.12) and tip_to_mcp < (palm_size * 1.05)
+            if finger_curled:
+                curled_count += 1
+
+        thumb_tip = hand_lms[4]
+        thumb_ip = hand_lms[3]
+        index_mcp = hand_lms[5]
+        thumb_folded = (
+            self._dist3d(thumb_tip, index_mcp) < (palm_size * 1.15)
+            and self._dist3d(thumb_tip, wrist) < (self._dist3d(thumb_ip, wrist) * 1.25)
+        )
+
+        return curled_count >= 3 and thumb_folded
+
+    def _extract_fists(self, hand_data: Optional[HandData]) -> Dict[str, Optional[bool]]:
+        """
+        Returns fist states by body side, with mirror correction.
+        A side can be None when that hand was not detected this frame.
+        """
+        fists: Dict[str, Optional[bool]] = {"left": None, "right": None}
+        best_score = {"left": -1.0, "right": -1.0}
+
         if not hand_data:
             return fists
 
         for idx, hand_lms in enumerate(hand_data.landmarks):
-            raw = self._raw_label(
-                hand_data.handedness[idx] if idx < len(hand_data.handedness) else []
-            )
-            if raw not in ("Left", "Right"):
+            handedness_entry = hand_data.handedness[idx] if idx < len(hand_data.handedness) else []
+            raw_label = self._raw_label(handedness_entry)
+            if raw_label not in ("Left", "Right"):
                 continue
 
-            # Mirror correction for camera-facing player
             if self.CAMERA_FACING_MIRROR:
-                body_side = "right" if raw == "Left" else "left"
+                side = "right" if raw_label == "Left" else "left"
             else:
-                body_side = raw.lower()
+                side = raw_label.lower()
 
-            fists[body_side] = self.is_fist(hand_lms)
+            score = self._hand_score(handedness_entry)
+            if score >= best_score[side]:
+                best_score[side] = score
+                fists[side] = self.is_fist(hand_lms)
 
         return fists
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Velocity computation
-    # ══════════════════════════════════════════════════════════════════════════
+    def _resolve_fists(self, raw_fists: Dict[str, Optional[bool]], ts_ms: float) -> Dict[str, bool]:
+        resolved = {"left": False, "right": False}
+
+        for side in ("left", "right"):
+            raw_value = raw_fists.get(side)
+            if raw_value is not None:
+                self.fist_state[side] = bool(raw_value)
+                self.fist_state_ts[side] = ts_ms
+
+            is_recent = (ts_ms - self.fist_state_ts[side]) <= self.fist_memory_ms
+            resolved[side] = self.fist_state[side] if is_recent else False
+
+        return resolved
 
     def _get_velocity(self, side: str, sh_width: float) -> Dict[str, float]:
         """
         Returns:
-          speed   – XY wrist speed normalized by sh_width (scale-invariant)
-          radial  – outward component (shoulder→wrist direction), normalized
-          vz_raw  – raw Z velocity in landmark units/sec (negative = toward cam)
+          speed: XY wrist speed normalized by shoulder width
+          radial: outward speed component from shoulder to wrist
+          vz_raw: raw Z velocity (negative means toward camera)
         """
         traj = self.history[side]
-        window = min(5, len(traj))
+        window = min(6, len(traj))
         if window < 2:
             return {"speed": 0.0, "radial": 0.0, "vz_raw": 0.0}
 
         t2, w2, sh2, _ = traj[-1]
-        t1, w1, sh1, _ = traj[-window]
+        t1, w1, _, _ = traj[-window]
 
         dt = (t2 - t1) / 1000.0
         if dt < 1e-6:
@@ -221,16 +225,13 @@ class CombatDetector:
 
         vx_raw = (w2.x - w1.x) / dt
         vy_raw = (w2.y - w1.y) / dt
-        vz_raw = (w2.z - w1.z) / dt  # negative = moving toward camera
+        vz_raw = (w2.z - w1.z) / dt
 
         if sh_width < 1e-6:
             return {"speed": 0.0, "radial": 0.0, "vz_raw": vz_raw}
 
-        vx = vx_raw / sh_width
-        vy = vy_raw / sh_width
-        speed = math.hypot(vx, vy)
+        speed = math.hypot(vx_raw, vy_raw) / sh_width
 
-        # Radial: project velocity onto (shoulder → wrist) unit vector
         rx = w2.x - sh2.x
         ry = w2.y - sh2.y
         rnorm = math.hypot(rx, ry)
@@ -241,14 +242,11 @@ class CombatDetector:
 
         return {"speed": speed, "radial": radial, "vz_raw": vz_raw}
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # State reset helpers
-    # ══════════════════════════════════════════════════════════════════════════
-
     def _reset_side(self, side: str) -> None:
-        self.state[side]    = "ready"
+        self.state[side] = "ready"
         self.peak_ext[side] = 0.0
         self.launch_z[side] = 0.0
+        self.launch_ts[side] = 0.0
         self.history[side].clear()
 
     def _reset_all(self, ts_ms: float) -> None:
@@ -256,9 +254,57 @@ class CombatDetector:
             self._reset_side(side)
             self.last_action_ts[side] = ts_ms
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # Main process
-    # ══════════════════════════════════════════════════════════════════════════
+    def _is_block_candidate(
+        self,
+        l_wr: Landmark,
+        r_wr: Landmark,
+        l_sh: Landmark,
+        r_sh: Landmark,
+        nose: Landmark,
+        mid_hip_xy: Optional[Tuple[float, float]],
+        sh_width: float,
+        fists: Dict[str, bool],
+    ) -> bool:
+        if sh_width < 1e-6:
+            return False
+
+        wrist_dist_ratio = self._dist2d(l_wr, r_wr) / sh_width
+        tight_touch = wrist_dist_ratio <= self.block_touch_ratio
+        strong_touch = wrist_dist_ratio <= self.block_strong_touch_ratio
+
+        mid_sh_x = (l_sh.x + r_sh.x) * 0.5
+        mid_sh_y = (l_sh.y + r_sh.y) * 0.5
+        if mid_hip_xy is not None:
+            torso_h = math.hypot(mid_hip_xy[0] - mid_sh_x, mid_hip_xy[1] - mid_sh_y)
+            torso_h = max(torso_h, sh_width * 0.8)
+        else:
+            torso_h = sh_width * 1.2
+
+        guard_y = mid_sh_y + (torso_h * 0.34)
+        wrists_high = l_wr.y < guard_y and r_wr.y < guard_y
+
+        near_face = (
+            self._dist2d(l_wr, nose) / sh_width <= self.block_face_ratio
+            and self._dist2d(r_wr, nose) / sh_width <= self.block_face_ratio
+        )
+        center_limit = sh_width * self.block_center_ratio
+        near_center = abs(l_wr.x - mid_sh_x) <= center_limit and abs(r_wr.x - mid_sh_x) <= center_limit
+
+        wrists_forward = (
+            l_wr.z <= (l_sh.z + self.block_forward_z_margin)
+            and r_wr.z <= (r_sh.z + self.block_forward_z_margin)
+        )
+
+        double_fist = fists["left"] and fists["right"]
+
+        if strong_touch and wrists_high and wrists_forward:
+            return True
+        if tight_touch and wrists_high and wrists_forward and (near_face or near_center):
+            return double_fist or near_face
+        if tight_touch and double_fist and (near_face or wrists_high):
+            return True
+
+        return False
 
     def process(
         self,
@@ -266,167 +312,179 @@ class CombatDetector:
         ts_ms: float,
         hand_data: Optional[HandData] = None,
     ) -> Optional[Dict[str, Any]]:
-
         if len(pose_landmarks) < 33:
             return None
 
-        NOSE  = pose_landmarks[0]
-        L_SH  = pose_landmarks[11]
-        R_SH  = pose_landmarks[12]
-        L_WR  = pose_landmarks[15]
-        R_WR  = pose_landmarks[16]
+        nose = pose_landmarks[0]
+        l_sh = pose_landmarks[11]
+        r_sh = pose_landmarks[12]
+        l_wr = pose_landmarks[15]
+        r_wr = pose_landmarks[16]
+        l_hip = pose_landmarks[23]
+        r_hip = pose_landmarks[24]
 
-        if (L_SH.visibility < self.vis_threshold or
-                R_SH.visibility < self.vis_threshold):
+        if (
+            self._visibility(l_sh) < self.shoulder_vis_threshold
+            or self._visibility(r_sh) < self.shoulder_vis_threshold
+        ):
             return None
 
-        sh_width = self._dist2d(L_SH, R_SH)
+        sh_width = self._dist2d(l_sh, r_sh)
         if sh_width < 1e-6:
             return None
 
-        fists = self._extract_fists(hand_data)
+        raw_fists = self._extract_fists(hand_data)
+        fists = self._resolve_fists(raw_fists, ts_ms)
 
-        # ══════════════════════════════════════════════════════════════════════
-        # BLOCK — wrists joined/touching anywhere in front of body
-        # ══════════════════════════════════════════════════════════════════════
-        wrist_dist      = self._dist2d(L_WR, R_WR)
-        wrists_touching = wrist_dist < sh_width * self.block_wrist_touch_ratio
+        hip_visible = self._visibility(l_hip) > 0.20 and self._visibility(r_hip) > 0.20
+        mid_hip_xy = ((l_hip.x + r_hip.x) * 0.5, (l_hip.y + r_hip.y) * 0.5) if hip_visible else None
 
-        if wrists_touching and fists["left"] and fists["right"]:
-            if ts_ms - self.last_action_ts["block"] > self.block_cooldown_ms:
-                self.last_action_ts["block"] = ts_ms
-                self.suppress_hits_until     = ts_ms + self.post_block_suppress_ms
-                self.settle_until            = ts_ms + self.post_block_settle_ms
-                self._reset_all(ts_ms)
-                return {"action": "block", "side": "both", "velocity": 1.0}
+        block_candidate = self._is_block_candidate(
+            l_wr=l_wr,
+            r_wr=r_wr,
+            l_sh=l_sh,
+            r_sh=r_sh,
+            nose=nose,
+            mid_hip_xy=mid_hip_xy,
+            sh_width=sh_width,
+            fists=fists,
+        )
 
-            # Block held / cooling — avoid idle spam
-            return None
+        if block_candidate:
+            self.block_hold_count += 1
+            self.block_release_count = 0
+        else:
+            self.block_hold_count = 0
+            self.block_release_count += 1
 
-        # ══════════════════════════════════════════════════════════════════════
-        # Block-release suppression window
-        # ══════════════════════════════════════════════════════════════════════
+        if self.block_active:
+            if not block_candidate and self.block_release_count >= self.block_release_frames_required:
+                self.block_active = False
+                self.block_release_count = 0
+                self.suppress_hits_until = max(
+                    self.suppress_hits_until, ts_ms + (self.post_block_suppress_ms * 0.5)
+                )
+                self.settle_until = max(self.settle_until, ts_ms + self.post_block_settle_ms)
+            return {"action": "idle", "side": "", "velocity": 0.0}
+
+        if (
+            block_candidate
+            and self.block_hold_count >= self.block_hold_frames_required
+            and (ts_ms - self.last_action_ts["block"]) >= self.block_cooldown_ms
+        ):
+            self.block_active = True
+            self.last_action_ts["block"] = ts_ms
+            self.suppress_hits_until = ts_ms + self.post_block_suppress_ms
+            self.settle_until = ts_ms + self.post_block_settle_ms
+            self._reset_all(ts_ms)
+            return {"action": "block", "side": "both", "velocity": 1.0}
+
+        if block_candidate:
+            return {"action": "idle", "side": "", "velocity": 0.0}
+
         if ts_ms < self.suppress_hits_until:
             return {"action": "idle", "side": "", "velocity": 0.0}
 
-        # ══════════════════════════════════════════════════════════════════════
-        # HIT detection — state machine per hand
-        # ══════════════════════════════════════════════════════════════════════
-        detected  = None
-        per_idle  = {"left": False, "right": False}
-        per_speed = {"left": 0.0,   "right": 0.0}
+        detected = None
+        per_idle = {"left": False, "right": False}
+        per_speed = {"left": 0.0, "right": 0.0}
 
-        WRIST    = {"left": L_WR, "right": R_WR}
-        SHOULDER = {"left": L_SH, "right": R_SH}
+        wrists = {"left": l_wr, "right": r_wr}
+        shoulders = {"left": l_sh, "right": r_sh}
 
         for side in ("left", "right"):
-            wr = WRIST[side]
-            sh = SHOULDER[side]
+            wr = wrists[side]
+            sh = shoulders[side]
 
-            if wr.visibility < self.vis_threshold:
+            if self._visibility(wr) < self.wrist_vis_threshold:
                 per_idle[side] = True
+                if self.state[side] != "ready":
+                    self._reset_side(side)
                 continue
 
-            # Always record history
-            self.history[side].append((ts_ms, wr, sh, NOSE))
+            self.history[side].append((ts_ms, wr, sh, nose))
 
             ext = self._dist2d(wr, sh) / sh_width
-
-            # Clamp tracking glitches
             if ext > self.ext_max:
                 self._reset_side(side)
                 continue
 
-            v      = self._get_velocity(side, sh_width)
-            speed  = v["speed"]
-            radial = v["radial"]
-            vz_raw = v["vz_raw"]   # negative = toward camera
+            vel = self._get_velocity(side, sh_width)
+            speed = vel["speed"]
+            radial = vel["radial"]
+            vz_raw = vel["vz_raw"]
+            forward_vz = -vz_raw
 
             per_speed[side] = speed
+            per_idle[side] = (
+                ext < self.idle_ext and speed < self.idle_speed and self.state[side] == "ready"
+            )
 
-            # Idle: arm near body, barely moving
-            per_idle[side] = (ext < self.idle_ext and speed < self.idle_speed)
-
-            # Per-hand cooldown
             if ts_ms - self.last_action_ts[side] < self.hit_cooldown_ms:
                 continue
             if ts_ms < self.settle_until:
                 continue
 
             is_fist = fists.get(side, False)
-
-            # ── State machine ─────────────────────────────────────────────────
             st = self.state[side]
 
             if st == "ready":
-                # Enter "launching" when wrist moves forward (z drops) and extends
-                moving_forward = vz_raw < -self.min_z_velocity
-                extending      = ext > self.ext_launch
+                launch_signal = forward_vz > self.min_forward_vz and (
+                    ext >= self.ext_launch or radial >= self.min_radial_speed
+                )
+                strong_forward = (
+                    forward_vz > (self.min_forward_vz * 1.8)
+                    and speed >= (self.min_total_speed * 1.1)
+                )
 
-                if moving_forward and extending:
-                    self.state[side]    = "launching"
+                if launch_signal and (is_fist or strong_forward):
+                    self.state[side] = "launching"
                     self.peak_ext[side] = ext
                     self.launch_z[side] = wr.z
+                    self.launch_ts[side] = ts_ms
 
             elif st == "launching":
-                # Track peak extension
                 if ext > self.peak_ext[side]:
                     self.peak_ext[side] = ext
 
-                moving_forward = vz_raw < -self.min_z_velocity
-                z_traveled     = self.launch_z[side] - wr.z   # positive = toward cam
-                enough_z       = z_traveled > 0.02
-                enough_ext     = ext >= self.ext_confirm
-                enough_speed   = speed >= self.min_total_speed
-                retracting     = (self.peak_ext[side] - ext) > 0.05
+                z_travel = self.launch_z[side] - wr.z
+                retracting = (self.peak_ext[side] - ext) > 0.05
 
-                # Confirm hit: fist + forward z motion + extension + speed
-                if (is_fist and
-                        enough_ext and
-                        enough_speed and
-                        enough_z and
-                        (moving_forward or retracting)):
+                enough_ext = self.peak_ext[side] >= self.ext_confirm
+                enough_speed = speed >= self.min_total_speed
+                enough_forward = z_travel >= self.min_z_travel or forward_vz > self.min_forward_vz
+                enough_radial = radial >= self.min_radial_speed or retracting
 
-                    detected = {
-                        "action":   "hit",
-                        "side":     side,
-                        "velocity": float(speed),
-                    }
+                if is_fist and enough_ext and enough_speed and enough_forward and enough_radial:
+                    detected = {"action": "hit", "side": side, "velocity": float(speed)}
                     self.last_action_ts[side] = ts_ms
-                    self.state[side]           = "recover"
-                    self.peak_ext[side]        = 0.0
+                    self.state[side] = "recover"
+                    self.peak_ext[side] = 0.0
                     break
 
-                # Arm pulled back without completing punch → reset
-                if ext < self.ext_idle and speed < 0.50:
-                    self.state[side]    = "ready"
+                timed_out = (ts_ms - self.launch_ts[side]) > self.launch_timeout_ms
+                if timed_out or (ext < self.ext_idle and speed < 0.45):
+                    self.state[side] = "ready"
                     self.peak_ext[side] = 0.0
                     self.launch_z[side] = 0.0
+                    self.launch_ts[side] = 0.0
 
             elif st == "recover":
-                # Wait for arm to return before next punch
-                if ext < self.ext_idle:
+                if ext < self.ext_idle and speed < (self.idle_speed * 1.2):
                     self.state[side] = "ready"
 
-        # ══════════════════════════════════════════════════════════════════════
-        # Return
-        # ══════════════════════════════════════════════════════════════════════
         if detected:
             return detected
 
         if per_idle["left"] and per_idle["right"]:
             return {
-                "action":   "idle",
-                "side":     "",
+                "action": "idle",
+                "side": "",
                 "velocity": float(max(per_speed["left"], per_speed["right"])),
             }
 
         return {"action": "none", "side": "", "velocity": 0.0}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# WebSocket Route
-# ─────────────────────────────────────────────────────────────────────────────
 
 @router.websocket("/ws/detect/{session_id}")
 async def websocket_detection(websocket: WebSocket, session_id: str):
@@ -437,12 +495,12 @@ async def websocket_detection(websocket: WebSocket, session_id: str):
         while True:
             data = await websocket.receive_json()
 
-            landmarks_raw  = data.get("landmarks", [])
+            landmarks_raw = data.get("landmarks", [])
             pose_landmarks = [Landmark(**lm) for lm in landmarks_raw]
-            ts             = data.get("timestamp", time.time() * 1000)
+            ts = data.get("timestamp", time.time() * 1000)
 
             hand_data_raw = data.get("hand_data")
-            hand_data     = HandData(**hand_data_raw) if hand_data_raw else None
+            hand_data = HandData(**hand_data_raw) if hand_data_raw else None
 
             result = detector.process(pose_landmarks, ts, hand_data)
 
@@ -451,8 +509,8 @@ async def websocket_detection(websocket: WebSocket, session_id: str):
                 continue
 
             action = result.get("action", "none")
-            side   = result.get("side", "")
-            vel    = float(result.get("velocity", 0.0))
+            side = result.get("side", "")
+            vel = float(result.get("velocity", 0.0))
 
             points = 0
             if action in ("hit", "block"):
@@ -460,13 +518,15 @@ async def websocket_detection(websocket: WebSocket, session_id: str):
                 if session_id in SESSIONS:
                     SESSIONS[session_id]["points"] += points
 
-            await websocket.send_json({
-                "action":       action,
-                "side":         side,
-                "points":       points,
-                "velocity":     vel,
-                "total_points": SESSIONS.get(session_id, {}).get("points", 0),
-            })
+            await websocket.send_json(
+                {
+                    "action": action,
+                    "side": side,
+                    "points": points,
+                    "velocity": vel,
+                    "total_points": SESSIONS.get(session_id, {}).get("points", 0),
+                }
+            )
 
     except WebSocketDisconnect:
         pass
