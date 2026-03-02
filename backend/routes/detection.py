@@ -31,6 +31,7 @@ class CombatDetector:
         # Visibility thresholds
         self.shoulder_vis_threshold = 0.45
         self.wrist_vis_threshold = 0.20
+        self.elbow_vis_threshold = 0.25
 
         # Timing windows
         self.hit_cooldown_ms = 380
@@ -41,25 +42,29 @@ class CombatDetector:
         self.launch_timeout_ms = 500
 
         # Block thresholds
-        # Lateral block target: both fists joined side-by-side at upper torso/guard height.
-        self.block_touch_ratio = 0.78
-        self.block_strong_touch_ratio = 0.62
-        self.block_lateral_y_ratio = 0.22
-        self.block_center_ratio = 0.88
-        self.block_guard_top_ratio = -0.18
-        self.block_guard_bottom_ratio = 0.78
-        self.block_hold_frames_required = 1
+        # Block target: elbows joined/near at upper torso guard zone.
+        self.block_elbow_close_ratio = 0.58
+        self.block_elbow_strong_ratio = 0.44
+        self.block_elbow_lateral_y_ratio = 0.22
+        self.block_center_ratio = 0.70
+        self.block_guard_top_ratio = -0.08
+        self.block_guard_bottom_ratio = 0.72
+        self.block_wrist_guard_ext = 1.45
+        self.block_hold_frames_required = 2
         self.block_release_frames_required = 2
 
         # Punch thresholds
         self.ext_idle = 1.02
-        self.ext_launch = 1.08
-        self.ext_confirm = 1.16
+        self.ext_launch = 1.10
+        self.ext_confirm = 1.18
         self.ext_max = 1.95
-        self.min_forward_vz = 0.18
-        self.min_total_speed = 0.65
-        self.min_radial_speed = 0.10
-        self.min_z_travel = 0.014
+        self.min_forward_vz = 0.20
+        self.min_total_speed = 0.72
+        self.min_radial_speed = 0.12
+        self.min_z_travel = 0.016
+        self.hit_side_speed_margin = 0.12
+        self.hit_side_vz_margin = 0.035
+        self.dual_hit_score_margin = 0.12
 
         # Idle thresholds
         self.idle_ext = 1.08
@@ -255,21 +260,21 @@ class CombatDetector:
 
     def _is_block_candidate(
         self,
+        l_el: Landmark,
+        r_el: Landmark,
         l_wr: Landmark,
         r_wr: Landmark,
         l_sh: Landmark,
         r_sh: Landmark,
-        nose: Landmark,
         mid_hip_xy: Optional[Tuple[float, float]],
         sh_width: float,
-        fists: Dict[str, bool],
     ) -> bool:
         if sh_width < 1e-6:
             return False
 
-        wrist_dist_ratio = self._dist2d(l_wr, r_wr) / sh_width
-        tight_touch = wrist_dist_ratio <= self.block_touch_ratio
-        strong_touch = wrist_dist_ratio <= self.block_strong_touch_ratio
+        elbow_dist_ratio = self._dist2d(l_el, r_el) / sh_width
+        elbows_close = elbow_dist_ratio <= self.block_elbow_close_ratio
+        elbows_strong = elbow_dist_ratio <= self.block_elbow_strong_ratio
 
         mid_sh_x = (l_sh.x + r_sh.x) * 0.5
         mid_sh_y = (l_sh.y + r_sh.y) * 0.5
@@ -282,26 +287,25 @@ class CombatDetector:
         guard_top = mid_sh_y + (torso_h * self.block_guard_top_ratio)
         guard_bottom = mid_sh_y + (torso_h * self.block_guard_bottom_ratio)
         in_guard = (
-            guard_top <= l_wr.y <= guard_bottom
-            and guard_top <= r_wr.y <= guard_bottom
+            guard_top <= l_el.y <= guard_bottom
+            and guard_top <= r_el.y <= guard_bottom
         )
 
-        lateral_joined = abs(l_wr.y - r_wr.y) <= (sh_width * self.block_lateral_y_ratio)
+        lateral_joined = abs(l_el.y - r_el.y) <= (sh_width * self.block_elbow_lateral_y_ratio)
 
-        mid_wr_x = (l_wr.x + r_wr.x) * 0.5
-        centered = abs(mid_wr_x - mid_sh_x) <= (sh_width * self.block_center_ratio)
+        mid_el_x = (l_el.x + r_el.x) * 0.5
+        centered = abs(mid_el_x - mid_sh_x) <= (sh_width * self.block_center_ratio)
 
-        near_face = (
-            self._dist2d(l_wr, nose) / sh_width <= 1.45
-            and self._dist2d(r_wr, nose) / sh_width <= 1.45
+        wrists_in_guard = (
+            (self._dist2d(l_wr, l_sh) / sh_width) <= self.block_wrist_guard_ext
+            and (self._dist2d(r_wr, r_sh) / sh_width) <= self.block_wrist_guard_ext
         )
 
-        # Favor true "lateral fists join" over front-depth checks.
-        if strong_touch and lateral_joined and centered and in_guard:
+        if elbows_strong and lateral_joined and in_guard:
             return True
-        if tight_touch and lateral_joined and centered and (in_guard or near_face):
+        if elbows_close and lateral_joined and centered and in_guard and wrists_in_guard:
             return True
-        if tight_touch and lateral_joined and (fists["left"] or fists["right"]) and in_guard:
+        if elbows_close and in_guard and wrists_in_guard and centered:
             return True
 
         return False
@@ -318,6 +322,8 @@ class CombatDetector:
         nose = pose_landmarks[0]
         l_sh = pose_landmarks[11]
         r_sh = pose_landmarks[12]
+        l_el = pose_landmarks[13]
+        r_el = pose_landmarks[14]
         l_wr = pose_landmarks[15]
         r_wr = pose_landmarks[16]
         l_hip = pose_landmarks[23]
@@ -344,16 +350,22 @@ class CombatDetector:
         hip_visible = self._visibility(l_hip) > 0.20 and self._visibility(r_hip) > 0.20
         mid_hip_xy = ((l_hip.x + r_hip.x) * 0.5, (l_hip.y + r_hip.y) * 0.5) if hip_visible else None
 
-        block_candidate = self._is_block_candidate(
-            l_wr=l_wr,
-            r_wr=r_wr,
-            l_sh=l_sh,
-            r_sh=r_sh,
-            nose=nose,
-            mid_hip_xy=mid_hip_xy,
-            sh_width=sh_width,
-            fists=fists,
+        elbows_visible = (
+            self._visibility(l_el) >= self.elbow_vis_threshold
+            and self._visibility(r_el) >= self.elbow_vis_threshold
         )
+        block_candidate = False
+        if elbows_visible:
+            block_candidate = self._is_block_candidate(
+                l_el=l_el,
+                r_el=r_el,
+                l_wr=l_wr,
+                r_wr=r_wr,
+                l_sh=l_sh,
+                r_sh=r_sh,
+                mid_hip_xy=mid_hip_xy,
+                sh_width=sh_width,
+            )
 
         hand_status = {side: {"detected": v is not None, "fist": bool(v)} for side, v in raw_fists.items()}
 
@@ -384,7 +396,7 @@ class CombatDetector:
             self.suppress_hits_until = ts_ms + self.post_block_suppress_ms
             self.settle_until = ts_ms + self.post_block_settle_ms
             self._reset_all(ts_ms)
-            return {"action": "block", "side": "both", "velocity": 1.0, "hand_status": hand_status}
+            return {"action": "block", "side": "", "velocity": 1.0, "hand_status": hand_status}
 
         if block_candidate:
             return {"action": "idle", "side": "", "velocity": 0.0, "hand_status": hand_status}
@@ -395,6 +407,11 @@ class CombatDetector:
         detected = None
         per_idle = {"left": False, "right": False}
         per_speed = {"left": 0.0, "right": 0.0}
+        frame_motion = {
+            "left": {"speed": 0.0, "forward_vz": 0.0},
+            "right": {"speed": 0.0, "forward_vz": 0.0},
+        }
+        hit_candidates: List[Dict[str, float]] = []
 
         wrists = {"left": l_wr, "right": r_wr}
         shoulders = {"left": l_sh, "right": r_sh}
@@ -423,6 +440,8 @@ class CombatDetector:
             forward_vz = -vz_raw
 
             per_speed[side] = speed
+            frame_motion[side]["speed"] = speed
+            frame_motion[side]["forward_vz"] = max(0.0, forward_vz)
             per_idle[side] = (
                 ext < self.idle_ext and speed < self.idle_speed and self.state[side] == "ready"
             )
@@ -436,7 +455,7 @@ class CombatDetector:
             st = self.state[side]
 
             if st == "ready":
-                launch_signal = forward_vz > self.min_forward_vz and (
+                launch_signal = forward_vz > self.min_forward_vz and speed > (self.min_total_speed * 0.55) and (
                     ext >= self.ext_launch or radial >= self.min_radial_speed
                 )
                 strong_forward = (
@@ -463,11 +482,20 @@ class CombatDetector:
                 enough_radial = radial >= self.min_radial_speed or retracting
 
                 if is_fist and enough_ext and enough_speed and enough_forward and enough_radial:
-                    detected = {"action": "hit", "side": side, "velocity": float(speed), "hand_status": hand_status}
-                    self.last_action_ts[side] = ts_ms
-                    self.state[side] = "recover"
-                    self.peak_ext[side] = 0.0
-                    break
+                    score = (
+                        (speed * 1.7)
+                        + (max(0.0, forward_vz) * 1.15)
+                        + (max(0.0, self.peak_ext[side] - self.ext_launch) * 0.8)
+                        + (max(0.0, radial) * 0.45)
+                    )
+                    hit_candidates.append(
+                        {
+                            "side": side,
+                            "velocity": float(speed),
+                            "score": float(score),
+                            "forward_vz": float(max(0.0, forward_vz)),
+                        }
+                    )
 
                 timed_out = (ts_ms - self.launch_ts[side]) > self.launch_timeout_ms
                 if timed_out or (ext < self.ext_idle and speed < 0.45):
@@ -479,6 +507,41 @@ class CombatDetector:
             elif st == "recover":
                 if ext < self.ext_idle and speed < (self.idle_speed * 1.2):
                     self.state[side] = "ready"
+
+        if hit_candidates:
+            hit_candidates.sort(key=lambda x: x["score"], reverse=True)
+            chosen = hit_candidates[0]
+
+            if len(hit_candidates) > 1:
+                second = hit_candidates[1]
+                if (chosen["score"] - second["score"]) < self.dual_hit_score_margin:
+                    chosen = None
+
+            if chosen is not None:
+                side = str(chosen["side"])
+                other = "right" if side == "left" else "left"
+                other_motion = frame_motion[other]
+                side_motion = frame_motion[side]
+
+                dominates_speed = side_motion["speed"] >= (
+                    other_motion["speed"] + self.hit_side_speed_margin
+                )
+                dominates_vz = side_motion["forward_vz"] >= (
+                    other_motion["forward_vz"] + self.hit_side_vz_margin
+                )
+
+                if dominates_speed or dominates_vz:
+                    detected = {
+                        "action": "hit",
+                        "side": side,
+                        "velocity": float(chosen["velocity"]),
+                        "hand_status": hand_status,
+                    }
+                    self.last_action_ts[side] = ts_ms
+                    self.state[side] = "recover"
+                    self.peak_ext[side] = 0.0
+                    self.launch_z[side] = 0.0
+                    self.launch_ts[side] = 0.0
 
         if detected:
             return detected
