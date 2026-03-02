@@ -32,6 +32,7 @@ class CombatDetector:
         self.shoulder_vis_threshold = 0.45
         self.wrist_vis_threshold = 0.20
         self.elbow_vis_threshold = 0.25
+        self.pose_smoothing_alpha = 0.45
 
         # Timing windows
         self.hit_cooldown_ms = 380
@@ -52,6 +53,9 @@ class CombatDetector:
         self.block_wrist_guard_ext = 1.45
         self.block_hold_frames_required = 2
         self.block_release_frames_required = 2
+        self.block_max_wrist_speed = 0.90
+        self.block_max_forward_vz = 0.16
+        self.block_max_elbow_speed = 0.85
 
         # Punch thresholds
         self.ext_idle = 1.02
@@ -65,6 +69,8 @@ class CombatDetector:
         self.hit_side_speed_margin = 0.12
         self.hit_side_vz_margin = 0.035
         self.dual_hit_score_margin = 0.12
+        self.strong_hit_speed = 1.05
+        self.strong_hit_forward_vz = 0.30
 
         # Idle thresholds
         self.idle_ext = 1.08
@@ -95,6 +101,9 @@ class CombatDetector:
         self.block_active = False
         self.block_hold_count = 0
         self.block_release_count = 0
+        self.smoothed_pose: Dict[str, Landmark] = {}
+        self.prev_frame_ts_ms = 0.0
+        self.prev_elbows: Dict[str, Optional[Landmark]] = {"left": None, "right": None}
 
     @staticmethod
     def _visibility(lm: Landmark) -> float:
@@ -107,6 +116,23 @@ class CombatDetector:
     @staticmethod
     def _dist3d(a: Landmark, b: Landmark) -> float:
         return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
+
+    def _smooth_landmark(self, key: str, lm: Landmark) -> Landmark:
+        prev = self.smoothed_pose.get(key)
+        if prev is None:
+            smoothed = Landmark(x=lm.x, y=lm.y, z=lm.z, visibility=lm.visibility)
+            self.smoothed_pose[key] = smoothed
+            return smoothed
+
+        a = self.pose_smoothing_alpha
+        smoothed = Landmark(
+            x=(prev.x + (lm.x - prev.x) * a),
+            y=(prev.y + (lm.y - prev.y) * a),
+            z=(prev.z + (lm.z - prev.z) * a),
+            visibility=lm.visibility,
+        )
+        self.smoothed_pose[key] = smoothed
+        return smoothed
 
     @staticmethod
     def _hand_score(handedness_entry: List[dict]) -> float:
@@ -165,12 +191,12 @@ class CombatDetector:
         A side can be None when that hand was not detected this frame.
         """
         fists: Dict[str, Optional[bool]] = {"left": None, "right": None}
-        best_cost = {"left": float("inf"), "right": float("inf")}
 
         if not hand_data:
             return fists
 
         max_assign_dist = max(sh_width * 1.8, 0.08)
+        candidates = []
 
         for idx, hand_lms in enumerate(hand_data.landmarks):
             if len(hand_lms) < 1:
@@ -183,14 +209,51 @@ class CombatDetector:
             if min(d_left, d_right) > max_assign_dist:
                 continue
 
-            side = "left" if d_left <= d_right else "right"
-            score = self._hand_score(handedness_entry)
-            side_dist = d_left if side == "left" else d_right
-            cost = side_dist - (0.08 * sh_width * min(max(score, 0.0), 1.0))
+            score = min(max(self._hand_score(handedness_entry), 0.0), 1.0)
+            candidates.append(
+                {
+                    "idx": idx,
+                    "d_left": d_left,
+                    "d_right": d_right,
+                    "score": score,
+                    "is_fist": self.is_fist(hand_lms),
+                }
+            )
 
-            if cost <= best_cost[side]:
-                best_cost[side] = cost
-                fists[side] = self.is_fist(hand_lms)
+        if not candidates:
+            return fists
+
+        if len(candidates) == 1:
+            c = candidates[0]
+            side = "left" if c["d_left"] <= c["d_right"] else "right"
+            fists[side] = bool(c["is_fist"])
+            return fists
+
+        best_pair = None
+        best_pair_cost = float("inf")
+        for left_c in candidates:
+            for right_c in candidates:
+                if left_c["idx"] == right_c["idx"]:
+                    continue
+                cost = (
+                    left_c["d_left"]
+                    + right_c["d_right"]
+                    - (0.08 * sh_width * (left_c["score"] + right_c["score"]))
+                )
+                if cost < best_pair_cost:
+                    best_pair_cost = cost
+                    best_pair = (left_c, right_c)
+
+        if best_pair is not None:
+            fists["left"] = bool(best_pair[0]["is_fist"])
+            fists["right"] = bool(best_pair[1]["is_fist"])
+            return fists
+
+        # Fallback: assign the best available side independently.
+        left_best = min(candidates, key=lambda c: c["d_left"] - (0.04 * sh_width * c["score"]))
+        right_best = min(candidates, key=lambda c: c["d_right"] - (0.04 * sh_width * c["score"]))
+        fists["left"] = bool(left_best["is_fist"])
+        fists["right"] = bool(right_best["is_fist"])
 
         return fists
 
@@ -329,6 +392,14 @@ class CombatDetector:
         l_hip = pose_landmarks[23]
         r_hip = pose_landmarks[24]
 
+        # Smooth key points to reduce jitter-induced false positives.
+        l_sh = self._smooth_landmark("l_sh", l_sh)
+        r_sh = self._smooth_landmark("r_sh", r_sh)
+        l_el = self._smooth_landmark("l_el", l_el)
+        r_el = self._smooth_landmark("r_el", r_el)
+        l_wr = self._smooth_landmark("l_wr", l_wr)
+        r_wr = self._smooth_landmark("r_wr", r_wr)
+
         if (
             self._visibility(l_sh) < self.shoulder_vis_threshold
             or self._visibility(r_sh) < self.shoulder_vis_threshold
@@ -339,6 +410,23 @@ class CombatDetector:
         if sh_width < 1e-6:
             return None
 
+        dt_s = 0.0
+        if self.prev_frame_ts_ms > 0.0:
+            dt_s = (ts_ms - self.prev_frame_ts_ms) / 1000.0
+
+        elbow_speed = {"left": 0.0, "right": 0.0}
+        if dt_s > 1e-6:
+            prev_l_el = self.prev_elbows["left"]
+            prev_r_el = self.prev_elbows["right"]
+            if prev_l_el is not None:
+                elbow_speed["left"] = self._dist2d(l_el, prev_l_el) / (dt_s * sh_width)
+            if prev_r_el is not None:
+                elbow_speed["right"] = self._dist2d(r_el, prev_r_el) / (dt_s * sh_width)
+
+        self.prev_frame_ts_ms = ts_ms
+        self.prev_elbows["left"] = l_el
+        self.prev_elbows["right"] = r_el
+
         raw_fists = self._extract_fists(
             hand_data=hand_data,
             l_pose_wr=l_wr,
@@ -347,8 +435,26 @@ class CombatDetector:
         )
         fists = self._resolve_fists(raw_fists, ts_ms)
 
+        if self._visibility(l_wr) >= self.wrist_vis_threshold:
+            self.history["left"].append((ts_ms, l_wr, l_sh, nose))
+        if self._visibility(r_wr) >= self.wrist_vis_threshold:
+            self.history["right"].append((ts_ms, r_wr, r_sh, nose))
+
         hip_visible = self._visibility(l_hip) > 0.20 and self._visibility(r_hip) > 0.20
         mid_hip_xy = ((l_hip.x + r_hip.x) * 0.5, (l_hip.y + r_hip.y) * 0.5) if hip_visible else None
+
+        left_block_vel = self._get_velocity("left", sh_width)
+        right_block_vel = self._get_velocity("right", sh_width)
+        block_peak_speed = max(left_block_vel["speed"], right_block_vel["speed"])
+        block_peak_forward_vz = max(
+            max(0.0, -left_block_vel["vz_raw"]),
+            max(0.0, -right_block_vel["vz_raw"]),
+        )
+        block_motion_quiet = (
+            block_peak_speed <= self.block_max_wrist_speed
+            and block_peak_forward_vz <= self.block_max_forward_vz
+        )
+        elbows_quiet = max(elbow_speed["left"], elbow_speed["right"]) <= self.block_max_elbow_speed
 
         elbows_visible = (
             self._visibility(l_el) >= self.elbow_vis_threshold
@@ -365,7 +471,7 @@ class CombatDetector:
                 r_sh=r_sh,
                 mid_hip_xy=mid_hip_xy,
                 sh_width=sh_width,
-            )
+            ) and block_motion_quiet and elbows_quiet
 
         hand_status = {side: {"detected": v is not None, "fist": bool(v)} for side, v in raw_fists.items()}
 
@@ -426,8 +532,6 @@ class CombatDetector:
                     self._reset_side(side)
                 continue
 
-            self.history[side].append((ts_ms, wr, sh, nose))
-
             ext = self._dist2d(wr, sh) / sh_width
             if ext > self.ext_max:
                 self._reset_side(side)
@@ -452,6 +556,7 @@ class CombatDetector:
                 continue
 
             is_fist = fists.get(side, False)
+            hand_present = raw_fists.get(side) is not None
             st = self.state[side]
 
             if st == "ready":
@@ -462,8 +567,13 @@ class CombatDetector:
                     forward_vz > (self.min_forward_vz * 1.8)
                     and speed >= (self.min_total_speed * 1.1)
                 )
+                fallback_launch = (
+                    (not hand_present)
+                    and speed >= self.strong_hit_speed
+                    and forward_vz >= self.strong_hit_forward_vz
+                )
 
-                if launch_signal and (is_fist or strong_forward):
+                if launch_signal and (is_fist or strong_forward or fallback_launch):
                     self.state[side] = "launching"
                     self.peak_ext[side] = ext
                     self.launch_z[side] = wr.z
@@ -481,7 +591,14 @@ class CombatDetector:
                 enough_forward = z_travel >= self.min_z_travel or forward_vz > self.min_forward_vz
                 enough_radial = radial >= self.min_radial_speed or retracting
 
-                if is_fist and enough_ext and enough_speed and enough_forward and enough_radial:
+                fallback_confirm = (
+                    (not hand_present)
+                    and speed >= self.strong_hit_speed
+                    and forward_vz >= self.strong_hit_forward_vz
+                    and self.peak_ext[side] >= (self.ext_confirm + 0.02)
+                )
+
+                if (is_fist or fallback_confirm) and enough_ext and enough_speed and enough_forward and enough_radial:
                     score = (
                         (speed * 1.7)
                         + (max(0.0, forward_vz) * 1.15)
@@ -516,6 +633,13 @@ class CombatDetector:
                 second = hit_candidates[1]
                 if (chosen["score"] - second["score"]) < self.dual_hit_score_margin:
                     chosen = None
+                    for c in hit_candidates:
+                        s = str(c["side"])
+                        if self.state[s] == "launching":
+                            self.state[s] = "ready"
+                            self.peak_ext[s] = 0.0
+                            self.launch_z[s] = 0.0
+                            self.launch_ts[s] = 0.0
 
             if chosen is not None:
                 side = str(chosen["side"])
@@ -542,6 +666,11 @@ class CombatDetector:
                     self.peak_ext[side] = 0.0
                     self.launch_z[side] = 0.0
                     self.launch_ts[side] = 0.0
+                    if self.state[other] == "launching":
+                        self.state[other] = "ready"
+                        self.peak_ext[other] = 0.0
+                        self.launch_z[other] = 0.0
+                        self.launch_ts[other] = 0.0
 
         if detected:
             return detected
