@@ -3,3 +3,6 @@ uvicorn[standard]
 pydantic
 numpy
 python-multipart
+mediapipe
+motor
+dnspython

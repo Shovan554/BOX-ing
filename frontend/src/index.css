@@ -1,6 +1,11 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
+@font-face {
+  font-family: 'TitleFont';
+  src: url('/assets/fonts/titleFont.ttf') format('truetype');
+}
+
 :root {
   --game-font: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }

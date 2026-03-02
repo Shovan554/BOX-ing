@@ -1,10 +1,11 @@
 import React, { useRef, useEffect, useState, Suspense } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Shield, Zap, Wifi, WifiOff, History, Activity } from 'lucide-react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas as ThreeCanvas } from '@react-three/fiber';
 import { PerspectiveCamera, Preload, ContactShadows } from '@react-three/drei';
 import GrannyModel from '../components/GrannyModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
+import { useHandDetection } from '../hooks/useHandDetection';
 import { useSoundEffects } from '../hooks/useSoundEffects';
 
 const API_BASE_URL = 'http://127.0.0.1:8000';
@@ -12,9 +13,12 @@ const WS_BASE_URL = 'ws://127.0.0.1:8000';
 
 const CameraTest = () => {
   const videoRef = useRef(null);
+  const canvasRef = useRef(null);
   const grannyRef = useRef(null);
   const landmarksData = usePoseDetection(videoRef);
+  const handData = useHandDetection(videoRef);
   const { playSound } = useSoundEffects();
+  const [currentState, setCurrentState] = useState('STAND BY');
   const [lastAction, setLastAction] = useState({ type: 'None', side: '', timestamp: 0 });
   const [actionLog, setActionLog] = useState([]);
   const [isReady, setIsReady] = useState(false);
@@ -22,6 +26,89 @@ const CameraTest = () => {
   const [sessionId, setSessionId] = useState(null);
   const wsRef = useRef(null);
   const logEndRef = useRef(null);
+
+  // Draw landmarks on canvas
+  useEffect(() => {
+    if (!canvasRef.current || !videoRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    const video = videoRef.current;
+    
+    // Set canvas size to match video display size
+    canvasRef.current.width = video.clientWidth;
+    canvasRef.current.height = video.clientHeight;
+    
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    
+    const drawPoint = (x, y, color = 'red', size = 3) => {
+      ctx.beginPath();
+      // Mirror x since video is mirrored
+      const mirroredX = canvasRef.current.width - (x * canvasRef.current.width);
+      ctx.arc(mirroredX, y * canvasRef.current.height, size, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.fill();
+    };
+
+    const drawLine = (p1, p2, color = 'white', width = 1) => {
+      ctx.beginPath();
+      const x1 = canvasRef.current.width - (p1.x * canvasRef.current.width);
+      const x2 = canvasRef.current.width - (p2.x * canvasRef.current.width);
+      ctx.moveTo(x1, p1.y * canvasRef.current.height);
+      ctx.lineTo(x2, p2.y * canvasRef.current.height);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.stroke();
+    };
+
+    // Draw Pose Landmarks
+    if (landmarksData?.points) {
+      // Key pose connections for boxing (shoulders, arms)
+      const connections = [
+        [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], // Shoulders and arms
+        [11, 23], [12, 24], [23, 24] // Torso
+      ];
+      
+      connections.forEach(([i, j]) => {
+        const p1 = landmarksData.points[i];
+        const p2 = landmarksData.points[j];
+        if (p1 && p2 && p1.visibility > 0.5 && p2.visibility > 0.5) {
+          drawLine(p1, p2, 'rgba(255, 255, 255, 0.3)', 2);
+        }
+      });
+
+      landmarksData.points.forEach((pt, i) => {
+        if (pt.visibility > 0.5) {
+          // Color coding: 0 is nose, 11-16 are arms
+          let color = 'rgba(255, 255, 255, 0.5)';
+          if (i === 0) color = 'red';
+          if (i === 15 || i === 16) color = '#00f2ff'; // Wrists
+          drawPoint(pt.x, pt.y, color, i === 0 ? 4 : 2);
+        }
+      });
+    }
+
+    // Draw Hand Landmarks
+    if (handData?.landmarks) {
+      handData.landmarks.forEach((hand, handIdx) => {
+        const isLeft = handData.handedness[handIdx][0].category_name === 'Left';
+        const color = isLeft ? '#ff0055' : '#00ff55';
+        
+        // Draw hand connections
+        const handConnections = [
+          [0, 1], [1, 2], [2, 3], [3, 4], // thumb
+          [0, 5], [5, 6], [6, 7], [7, 8], // index
+          [5, 9], [9, 10], [10, 11], [11, 12], // middle
+          [9, 13], [13, 14], [14, 15], [15, 16], // ring
+          [13, 17], [17, 18], [18, 19], [19, 20], [0, 17] // pinky
+        ];
+        
+        handConnections.forEach(([i, j]) => {
+          drawLine(hand[i], hand[j], color, 1.5);
+        });
+        
+        hand.forEach(pt => drawPoint(pt.x, pt.y, color, 2));
+      });
+    }
+  }, [landmarksData, handData]);
 
   // Auto-scroll log
   useEffect(() => {
@@ -56,37 +143,42 @@ const CameraTest = () => {
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.action && data.action !== 'none') {
-          const actionType = data.action.charAt(0).toUpperCase() + data.action.slice(1);
-          
-          // Trigger Granny Animation
-          if (grannyRef.current) {
-            if (actionType === 'Hit') {
-              grannyRef.current.playAction(Math.random() > 0.5 ? 'right hook' : 'left hook');
-            } else if (actionType === 'Block') {
-              grannyRef.current.playAction('right block');
-            } else if (actionType === 'Idle') {
-              grannyRef.current.playAction('Idle');
+        if (data.action) {
+          if (data.action !== 'none') {
+            const actionType = data.action.charAt(0).toUpperCase() + data.action.slice(1);
+            setCurrentState(actionType === 'Idle' ? 'IDLE' : actionType.toUpperCase());
+            
+            // Trigger Granny Animation
+            if (grannyRef.current) {
+              if (actionType === 'Hit') {
+                grannyRef.current.playAction(Math.random() > 0.5 ? 'right hook' : 'left hook');
+              } else if (actionType === 'Block') {
+                grannyRef.current.playAction('right block');
+              } else if (actionType === 'Idle') {
+                grannyRef.current.playAction('Idle');
+              }
             }
+
+            // Skip logging and sound for idle
+            if (data.action === 'idle') return;
+
+            // Play sound based on action
+            if (actionType === 'Hit') playSound('HIT');
+            if (actionType === 'Block') playSound('BLOCK');
+
+            const newAction = {
+              id: Date.now(),
+              type: actionType,
+              side: data.side,
+              timestamp: performance.now(),
+              timeStr: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' })
+            };
+            
+            setLastAction(newAction);
+            setActionLog(prev => [newAction, ...prev].slice(0, 50)); // Keep last 50
+          } else {
+            setCurrentState('ACTIVE');
           }
-
-          // Skip logging and sound for idle
-          if (data.action === 'idle') return;
-
-          // Play sound based on action
-          if (actionType === 'Hit') playSound('HIT');
-          if (actionType === 'Block') playSound('BLOCK');
-
-          const newAction = {
-            id: Date.now(),
-            type: actionType,
-            side: data.side,
-            timestamp: performance.now(),
-            timeStr: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' })
-          };
-          
-          setLastAction(newAction);
-          setActionLog(prev => [newAction, ...prev].slice(0, 50)); // Keep last 50
         }
       };
 
@@ -107,12 +199,18 @@ const CameraTest = () => {
   // Send landmarks to backend
   useEffect(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN && landmarksData) {
-      wsRef.current.send(JSON.stringify({
+      const payload = {
         landmarks: landmarksData.points,
         timestamp: landmarksData.timestamp
-      }));
+      };
+      
+      if (handData) {
+        payload.hand_data = handData;
+      }
+      
+      wsRef.current.send(JSON.stringify(payload));
     }
-  }, [landmarksData]);
+  }, [landmarksData, handData]);
 
   useEffect(() => {
     const setupCamera = async () => {
@@ -170,6 +268,10 @@ const CameraTest = () => {
               playsInline
               muted
             />
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 w-full h-full pointer-events-none"
+            />
             
             {/* HUD Overlay */}
             <div className="absolute inset-0 flex flex-col items-center justify-between p-10 pointer-events-none">
@@ -208,8 +310,13 @@ const CameraTest = () => {
                     <div className="h-1 w-full bg-current mt-2 animate-out fade-out duration-700" />
                   </div>
                 ) : (
-                  <div className="text-white/5 text-2xl font-black italic uppercase tracking-[0.8em] select-none">
-                    Stand By
+                  <div className="flex flex-col items-center">
+                    <div className="text-white/5 text-2xl font-black italic uppercase tracking-[0.8em] select-none mb-2">
+                      System Status
+                    </div>
+                    <div className={`text-4xl font-black italic uppercase tracking-[0.4em] ${currentState === 'IDLE' ? 'text-white/20' : 'text-green-500/50'}`}>
+                      {currentState}
+                    </div>
                   </div>
                 )}
               </div>
@@ -235,7 +342,7 @@ const CameraTest = () => {
 
           {/* 3D Model Viewport */}
           <div className="h-64 relative rounded-3xl overflow-hidden border-2 border-white/10 bg-zinc-950 shadow-2xl">
-            <Canvas 
+            <ThreeCanvas 
               shadows
               flat
               gl={{ antialias: true, alpha: true }}
@@ -251,7 +358,7 @@ const CameraTest = () => {
               </Suspense>
               
               <ContactShadows opacity={0.6} scale={10} blur={2.5} far={4.5} color="#000000" />
-            </Canvas>
+            </ThreeCanvas>
           </div>
         </div>
 

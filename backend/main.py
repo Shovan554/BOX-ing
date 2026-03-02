@@ -11,8 +11,17 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from routes.detection import router as detection_router
 from routes.sessions import router as sessions_router
+from database.db import check_db_connection
 
 app = FastAPI(title="BOX-ing API", version="0.3.0")
+
+@app.on_event("startup")
+async def startup_db_client():
+    connected = await check_db_connection()
+    if connected:
+        print("Successfully connected to MongoDB Atlas (userdata database)")
+    else:
+        print("CRITICAL: Failed to connect to MongoDB Atlas")
 
 app.add_middleware(
     CORSMiddleware,

@@ -48,7 +48,7 @@ const LandingPage = () => {
           className="relative px-12 py-8 mt-32 mb-auto group text-center"
         >
           <h1 
-            className="text-[12rem] md:text-[16rem] font-black tracking-[-0.05em] text-white font-mono uppercase leading-[0.8] mix-blend-difference"
+            className="text-[12rem] md:text-[16rem] font-black tracking-[-0.05em] text-white font-title uppercase leading-[0.8] mix-blend-difference"
           >
             SHADOW<br /><span className="text-[16rem] md:text-[22rem]">BOXING</span>
           </h1>

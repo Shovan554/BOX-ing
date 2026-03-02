@@ -37,16 +37,37 @@ const MainMenu = () => {
     <div className="w-full h-full flex items-center justify-center overflow-hidden bg-[#0a0a0a] relative">
       {/* Dynamic Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-red-900/10 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-900/10 blur-[120px] rounded-full" />
+        <motion.div 
+          animate={{ 
+            scale: [1, 1.2, 1],
+            opacity: [0.15, 0.25, 0.15],
+            x: [0, 50, 0],
+            y: [0, 30, 0]
+          }}
+          transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute top-[-10%] left-[-10%] w-[60%] h-[60%] bg-red-600/20 blur-[150px] rounded-full" 
+        />
+        <motion.div 
+          animate={{ 
+            scale: [1.2, 1, 1.2],
+            opacity: [0.1, 0.2, 0.1],
+            x: [0, -40, 0],
+            y: [0, -50, 0]
+          }}
+          transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
+          className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] bg-blue-600/15 blur-[150px] rounded-full" 
+        />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-red-950/5 to-black/80" />
       </div>
 
       {/* Scanline Effect Overlay */}
       <div className="absolute inset-0 pointer-events-none z-50 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.02),rgba(0,255,0,0.01),rgba(0,0,255,0.02))] bg-[length:100%_4px,3px_100%] opacity-20" />
 
       {/* Background Text Decor */}
-      <div className="absolute inset-0 flex items-center justify-center opacity-[0.02] select-none pointer-events-none">
-        <h1 className="text-[40vw] font-black italic tracking-tighter uppercase leading-none">BOXING</h1>
+      <div className="absolute inset-0 flex flex-col items-center justify-center opacity-[0.03] select-none pointer-events-none">
+        <h1 className="text-[18vw] font-black italic tracking-tighter uppercase leading-[0.8] font-title text-center">
+          SHADOW<br />BOXING
+        </h1>
       </div>
 
       {/* Centered Menu Container */}
