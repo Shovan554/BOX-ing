@@ -1,8 +1,7 @@
 from uuid import uuid4
 from fastapi import APIRouter
 from state import SESSIONS, utc_now
-from database.db import leaderboard_col
-
+from database.datab import leaderboard_col
 router = APIRouter()
 
 @router.post("/session/start")
