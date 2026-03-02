@@ -7,6 +7,7 @@ import Multiplayer from './pages/Multiplayer';
 import CreateRoom from './pages/CreateRoom';
 import Leaderboard from './pages/Leaderboard';
 import Settings from './pages/Settings';
+import PovTest from './pages/PovTest';
 import Intro from './components/Intro';
 import BackgroundMusic from './components/BackgroundMusic';
 import { Maximize, Minimize, Volume2, VolumeX } from 'lucide-react';
@@ -110,6 +111,7 @@ function App() {
               <Route path="/create-room" element={<CreateRoom />} />
               <Route path="/leaderboard" element={<Leaderboard />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/pov-test" element={<PovTest />} />
             </Routes>
           </Suspense>
         </>

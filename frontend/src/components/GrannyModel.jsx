@@ -1,11 +1,15 @@
-import React, { useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
+import React, { useRef, useEffect, useImperativeHandle, forwardRef, useMemo } from 'react';
 import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
+import { SkeletonUtils } from 'three-stdlib';
 
 const GrannyModel = forwardRef((props, ref) => {
   const group = useRef();
   const currentActionRef = useRef('Idle');
   const { scene, animations } = useGLTF('/assets/models/granny/granny.glb');
+  
+  // Clone the scene for multiple instances
+  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
   const { actions, mixer } = useAnimations(animations, group);
 
   useImperativeHandle(ref, () => ({
@@ -70,7 +74,7 @@ const GrannyModel = forwardRef((props, ref) => {
 
   return (
     <group ref={group} {...props} dispose={null}>
-      <primitive object={scene} />
+      <primitive object={clone} />
     </group>
   );
 });
