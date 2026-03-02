@@ -20,7 +20,7 @@ export const useSoundEffects = () => {
     
     const sound = audioRefs.current[key];
     sound.currentTime = 0; // Reset to start
-    sound.volume = 0.5;
+    sound.volume = 1.0;
     
     sound.play().catch(e => console.log("Audio playback blocked by browser until user interaction."));
   };

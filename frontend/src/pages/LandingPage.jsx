@@ -41,14 +41,25 @@ const LandingPage = () => {
       </div>
 
       <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
-        <motion.h1 
+        <motion.div
           initial={{ y: -50, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 1, ease: "circOut" }}
-          className="text-[10rem] md:text-[14rem] font-black tracking-[0.4em] text-white font-mono uppercase mb-auto mt-64 text-center pl-[0.4em]"
+          className="relative px-12 py-8 mt-32 mb-auto group text-center"
         >
-          BOXING
-        </motion.h1>
+          <h1 
+            className="text-[12rem] md:text-[16rem] font-black tracking-[-0.05em] text-white font-mono uppercase leading-[0.8] mix-blend-difference"
+          >
+            SHADOW<br /><span className="text-[16rem] md:text-[22rem]">BOXING</span>
+          </h1>
+
+          {/* Subtitle/Version text for extra tech feel */}
+          <div className="mt-4 flex items-center justify-center gap-4">
+            <div className="h-[1px] w-12 bg-white/40" />
+            <span className="text-[10px] font-mono tracking-[0.5em] text-white/40 uppercase">Combat System v1.0.4</span>
+            <div className="h-[1px] w-12 bg-white/40" />
+          </div>
+        </motion.div>
 
         <div className="pb-32">
           <motion.button

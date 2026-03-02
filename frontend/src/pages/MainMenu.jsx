@@ -1,22 +1,24 @@
-import React, { Suspense } from 'react';
+import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Canvas } from '@react-three/fiber';
-import { PerspectiveCamera, ContactShadows, Preload } from '@react-three/drei';
-import GrannyModel from '../components/GrannyModel';
+import { motion } from 'framer-motion';
 import { useSoundEffects } from '../hooks/useSoundEffects';
 
-const MenuItem = ({ label, onClick, onHover }) => (
-  <button
+const MenuItem = ({ label, onClick, onHover, index }) => (
+  <motion.button
+    initial={{ x: -100, opacity: 0 }}
+    animate={{ x: 0, opacity: 1 }}
+    transition={{ delay: 0.1 * index, duration: 0.5, ease: "circOut" }}
     onClick={onClick}
     onMouseEnter={onHover}
-    className="group w-full text-left px-12 py-5 text-4xl font-black italic tracking-tighter hover:bg-white hover:text-black transition-all duration-300 uppercase relative overflow-hidden"
+    className="group w-full text-center px-12 py-6 text-6xl font-black italic tracking-tighter hover:bg-white hover:text-black transition-all duration-300 uppercase relative overflow-hidden"
   >
     <div className="absolute inset-0 bg-red-600 translate-x-[-101%] group-hover:translate-x-0 transition-transform duration-300 -z-10" />
-    <span className="inline-block transform group-hover:translate-x-6 transition-transform duration-300">
+    <span className="relative z-10 block transform group-hover:scale-110 transition-transform duration-300">
       {label}
     </span>
-    <div className="absolute right-8 top-1/2 -translate-y-1/2 w-4 h-1 bg-white opacity-0 group-hover:opacity-100 transition-opacity" />
-  </button>
+    {/* Animated underscore for active hover */}
+    <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-0 h-1 bg-black group-hover:w-1/3 transition-all duration-300" />
+  </motion.button>
 );
 
 const MainMenu = () => {
@@ -32,49 +34,43 @@ const MainMenu = () => {
   ];
 
   return (
-    <div className="w-full h-full flex flex-col md:flex-row overflow-hidden bg-black/40">
+    <div className="w-full h-full flex items-center justify-center overflow-hidden bg-[#0a0a0a] relative">
+      {/* Dynamic Background Elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-red-900/10 blur-[120px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-900/10 blur-[120px] rounded-full" />
+      </div>
+
       {/* Scanline Effect Overlay */}
       <div className="absolute inset-0 pointer-events-none z-50 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.1)_50%),linear-gradient(90deg,rgba(255,0,0,0.02),rgba(0,255,0,0.01),rgba(0,0,255,0.02))] bg-[length:100%_4px,3px_100%] opacity-20" />
 
-      {/* 3D Character Section */}
-      <div className="w-full md:w-1/2 h-1/2 md:h-full relative">
-        <div className="absolute top-12 left-12 z-10 border-l-4 border-red-600 pl-4">
-          <h2 className="text-sm font-black tracking-[0.4em] uppercase text-white/40">Fighter Status</h2>
-          <p className="text-xl font-bold italic text-white uppercase tracking-wider">Ready for Combat</p>
-        </div>
-        
-        <Canvas 
-          shadows
-          flat
-          gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
-          dpr={[1, 1.5]}
-          eventSource={document.getElementById('root')}
-          eventPrefix="client"
-        >
-          <PerspectiveCamera makeDefault position={[0, 1.5, 4]} fov={50} />
-          <ambientLight intensity={0.7} />
-          <spotLight position={[5, 5, 5]} angle={0.15} penumbra={1} intensity={2} color="#ff0000" castShadow />
-          <pointLight position={[-5, 5, -5]} intensity={1} color="#00ffff" />
-          
-          <Suspense fallback={null}>
-            <GrannyModel position={[0, -1, 0]} scale={1.5} />
-            <Preload all />
-          </Suspense>
-          
-          <ContactShadows opacity={0.6} scale={10} blur={2.5} far={4.5} color="#000000" />
-        </Canvas>
+      {/* Background Text Decor */}
+      <div className="absolute inset-0 flex items-center justify-center opacity-[0.02] select-none pointer-events-none">
+        <h1 className="text-[40vw] font-black italic tracking-tighter uppercase leading-none">BOXING</h1>
       </div>
 
-      {/* Menu Options Section */}
-      <div className="w-full md:w-1/2 h-1/2 md:h-full flex flex-col justify-center bg-zinc-950/80 backdrop-blur-xl border-l border-white/5 relative">
-        <div className="absolute top-0 right-0 p-8 opacity-100 pointer-events-none">
-          <span className="text-[120px] font-black italic tracking-tighter leading-none select-none text-black font-mono uppercase">BOXING</span>
+      {/* Centered Menu Container */}
+      <motion.div 
+        initial={{ y: 50, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.8, ease: "circOut" }}
+        className="w-full max-w-4xl z-10 flex flex-col items-center"
+      >
+        <div className="mb-12 flex flex-col items-center">
+          <motion.div 
+            initial={{ scaleX: 0 }}
+            animate={{ scaleX: 1 }}
+            transition={{ delay: 0.5, duration: 0.8 }}
+            className="w-24 h-1 bg-red-600 mb-4" 
+          />
+          <h2 className="text-sm font-black tracking-[0.8em] uppercase text-white/40 pl-[0.8em]">Main Menu</h2>
         </div>
-        
-        <div className="py-8 z-10">
-          {menuOptions.map((option) => (
+
+        <div className="w-full flex flex-col space-y-2">
+          {menuOptions.map((option, index) => (
             <MenuItem
               key={option.label}
+              index={index}
               label={option.label}
               onHover={() => playSound('SELECT')}
               onClick={() => {
@@ -84,19 +80,28 @@ const MainMenu = () => {
             />
           ))}
         </div>
-        
-        <div className="mt-auto p-12 border-t border-white/5 flex justify-between items-center z-10">
+
+        <div className="mt-16 w-full flex justify-between items-center px-12 pt-8 border-t border-white/5">
           <button 
             onMouseEnter={() => playSound('SELECT')}
             onClick={() => navigate('/')}
             className="text-white/20 hover:text-red-500 transition-colors uppercase font-black tracking-[0.3em] text-xs group flex items-center gap-2"
           >
             <div className="w-4 h-[1px] bg-current" />
-            Quit to Title
+            Return to Title
           </button>
-          <span className="text-white/5 font-black text-xs tracking-widest">v0.3.0 ALPHA</span>
+          <div className="flex flex-col items-end">
+            <span className="text-white/5 font-black text-[10px] tracking-[0.4em]">SYSTEM v0.3.0 ALPHA</span>
+            <span className="text-white/5 font-black text-[10px] tracking-[0.4em]">BUILD ID: 01032026</span>
+          </div>
         </div>
-      </div>
+      </motion.div>
+
+      {/* Decorative Corner Accents */}
+      <div className="absolute top-12 left-12 w-12 h-12 border-t border-l border-white/10" />
+      <div className="absolute top-12 right-12 w-12 h-12 border-t border-r border-white/10" />
+      <div className="absolute bottom-12 left-12 w-12 h-12 border-b border-l border-white/10" />
+      <div className="absolute bottom-12 right-12 w-12 h-12 border-b border-r border-white/10" />
     </div>
   );
 };
