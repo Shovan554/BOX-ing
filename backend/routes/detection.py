@@ -27,9 +27,6 @@ class HandData(BaseModel):
 class CombatDetector:
     """Detect hit, block, and idle events from pose and hand landmarks."""
 
-    # When a player faces the camera, MediaPipe Hands labels are mirrored.
-    CAMERA_FACING_MIRROR = True
-
     def __init__(self, history_len: int = 30) -> None:
         # Visibility thresholds
         self.shoulder_vis_threshold = 0.45
@@ -44,12 +41,14 @@ class CombatDetector:
         self.launch_timeout_ms = 500
 
         # Block thresholds
-        self.block_touch_ratio = 0.68
-        self.block_strong_touch_ratio = 0.52
-        self.block_face_ratio = 1.25
-        self.block_center_ratio = 0.78
-        self.block_forward_z_margin = 0.12
-        self.block_hold_frames_required = 2
+        # Lateral block target: both fists joined side-by-side at upper torso/guard height.
+        self.block_touch_ratio = 0.78
+        self.block_strong_touch_ratio = 0.62
+        self.block_lateral_y_ratio = 0.22
+        self.block_center_ratio = 0.88
+        self.block_guard_top_ratio = -0.18
+        self.block_guard_bottom_ratio = 0.78
+        self.block_hold_frames_required = 1
         self.block_release_frames_required = 2
 
         # Punch thresholds
@@ -105,19 +104,6 @@ class CombatDetector:
         return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
 
     @staticmethod
-    def _raw_label(handedness_entry: List[dict]) -> Optional[str]:
-        if not handedness_entry:
-            return None
-        cat = handedness_entry[0]
-        label = (
-            cat.get("category_name")
-            or cat.get("label")
-            or cat.get("categoryName")
-            or cat.get("handedness")
-        )
-        return label.strip().title() if label else None
-
-    @staticmethod
     def _hand_score(handedness_entry: List[dict]) -> float:
         if not handedness_entry:
             return 0.0
@@ -161,31 +147,44 @@ class CombatDetector:
 
         return curled_count >= 3 and thumb_folded
 
-    def _extract_fists(self, hand_data: Optional[HandData]) -> Dict[str, Optional[bool]]:
+    def _extract_fists(
+        self,
+        hand_data: Optional[HandData],
+        l_pose_wr: Landmark,
+        r_pose_wr: Landmark,
+        sh_width: float,
+    ) -> Dict[str, Optional[bool]]:
         """
-        Returns fist states by body side, with mirror correction.
+        Returns fist states by pose body side.
+        Mapping uses nearest pose wrist to avoid left/right confusion from mirrored cameras.
         A side can be None when that hand was not detected this frame.
         """
         fists: Dict[str, Optional[bool]] = {"left": None, "right": None}
-        best_score = {"left": -1.0, "right": -1.0}
+        best_cost = {"left": float("inf"), "right": float("inf")}
 
         if not hand_data:
             return fists
 
+        max_assign_dist = max(sh_width * 1.8, 0.08)
+
         for idx, hand_lms in enumerate(hand_data.landmarks):
+            if len(hand_lms) < 1:
+                continue
             handedness_entry = hand_data.handedness[idx] if idx < len(hand_data.handedness) else []
-            raw_label = self._raw_label(handedness_entry)
-            if raw_label not in ("Left", "Right"):
+
+            hand_wr = hand_lms[0]
+            d_left = self._dist2d(hand_wr, l_pose_wr)
+            d_right = self._dist2d(hand_wr, r_pose_wr)
+            if min(d_left, d_right) > max_assign_dist:
                 continue
 
-            if self.CAMERA_FACING_MIRROR:
-                side = "right" if raw_label == "Left" else "left"
-            else:
-                side = raw_label.lower()
-
+            side = "left" if d_left <= d_right else "right"
             score = self._hand_score(handedness_entry)
-            if score >= best_score[side]:
-                best_score[side] = score
+            side_dist = d_left if side == "left" else d_right
+            cost = side_dist - (0.08 * sh_width * min(max(score, 0.0), 1.0))
+
+            if cost <= best_cost[side]:
+                best_cost[side] = cost
                 fists[side] = self.is_fist(hand_lms)
 
         return fists
@@ -280,28 +279,29 @@ class CombatDetector:
         else:
             torso_h = sh_width * 1.2
 
-        guard_y = mid_sh_y + (torso_h * 0.34)
-        wrists_high = l_wr.y < guard_y and r_wr.y < guard_y
+        guard_top = mid_sh_y + (torso_h * self.block_guard_top_ratio)
+        guard_bottom = mid_sh_y + (torso_h * self.block_guard_bottom_ratio)
+        in_guard = (
+            guard_top <= l_wr.y <= guard_bottom
+            and guard_top <= r_wr.y <= guard_bottom
+        )
+
+        lateral_joined = abs(l_wr.y - r_wr.y) <= (sh_width * self.block_lateral_y_ratio)
+
+        mid_wr_x = (l_wr.x + r_wr.x) * 0.5
+        centered = abs(mid_wr_x - mid_sh_x) <= (sh_width * self.block_center_ratio)
 
         near_face = (
-            self._dist2d(l_wr, nose) / sh_width <= self.block_face_ratio
-            and self._dist2d(r_wr, nose) / sh_width <= self.block_face_ratio
-        )
-        center_limit = sh_width * self.block_center_ratio
-        near_center = abs(l_wr.x - mid_sh_x) <= center_limit and abs(r_wr.x - mid_sh_x) <= center_limit
-
-        wrists_forward = (
-            l_wr.z <= (l_sh.z + self.block_forward_z_margin)
-            and r_wr.z <= (r_sh.z + self.block_forward_z_margin)
+            self._dist2d(l_wr, nose) / sh_width <= 1.45
+            and self._dist2d(r_wr, nose) / sh_width <= 1.45
         )
 
-        double_fist = fists["left"] and fists["right"]
-
-        if strong_touch and wrists_high and wrists_forward:
+        # Favor true "lateral fists join" over front-depth checks.
+        if strong_touch and lateral_joined and centered and in_guard:
             return True
-        if tight_touch and wrists_high and wrists_forward and (near_face or near_center):
-            return double_fist or near_face
-        if tight_touch and double_fist and (near_face or wrists_high):
+        if tight_touch and lateral_joined and centered and (in_guard or near_face):
+            return True
+        if tight_touch and lateral_joined and (fists["left"] or fists["right"]) and in_guard:
             return True
 
         return False
@@ -333,7 +333,12 @@ class CombatDetector:
         if sh_width < 1e-6:
             return None
 
-        raw_fists = self._extract_fists(hand_data)
+        raw_fists = self._extract_fists(
+            hand_data=hand_data,
+            l_pose_wr=l_wr,
+            r_pose_wr=r_wr,
+            sh_width=sh_width,
+        )
         fists = self._resolve_fists(raw_fists, ts_ms)
 
         hip_visible = self._visibility(l_hip) > 0.20 and self._visibility(r_hip) > 0.20
