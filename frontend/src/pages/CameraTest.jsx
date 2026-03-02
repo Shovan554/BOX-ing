@@ -19,6 +19,7 @@ const CameraTest = () => {
   const handData = useHandDetection(videoRef);
   const { playSound } = useSoundEffects();
   const [currentState, setCurrentState] = useState('STAND BY');
+  const [handStatus, setHandStatus] = useState({ left: { detected: false, fist: false }, right: { detected: false, fist: false } });
   const [lastAction, setLastAction] = useState({ type: 'None', side: '', timestamp: 0 });
   const [actionLog, setActionLog] = useState([]);
   const [isReady, setIsReady] = useState(false);
@@ -143,6 +144,9 @@ const CameraTest = () => {
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        if (data.hand_status) {
+          setHandStatus(data.hand_status);
+        }
         if (data.action) {
           if (data.action !== 'none') {
             const actionType = data.action.charAt(0).toUpperCase() + data.action.slice(1);
@@ -296,6 +300,29 @@ const CameraTest = () => {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className="font-black text-sm text-white tracking-tighter uppercase">{wsConnected ? 'Python Core Online' : 'Linking...'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Hand Status HUD */}
+              <div className="w-full flex justify-between px-4">
+                <div className={`flex flex-col gap-1 transition-all duration-300 ${handStatus.left.detected ? 'opacity-100' : 'opacity-30'}`}>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${handStatus.left.detected ? (handStatus.left.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Left Peripheral</span>
+                  </div>
+                  <div className="text-xl font-black italic text-white tracking-tighter uppercase">
+                    {handStatus.left.detected ? (handStatus.left.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
+                  </div>
+                </div>
+
+                <div className={`flex flex-col items-end gap-1 transition-all duration-300 ${handStatus.right.detected ? 'opacity-100' : 'opacity-30'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Right Peripheral</span>
+                    <div className={`w-2 h-2 rounded-full ${handStatus.right.detected ? (handStatus.right.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
+                  </div>
+                  <div className="text-xl font-black italic text-white tracking-tighter uppercase">
+                    {handStatus.right.detected ? (handStatus.right.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
                   </div>
                 </div>
               </div>

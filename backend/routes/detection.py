@@ -355,6 +355,8 @@ class CombatDetector:
             fists=fists,
         )
 
+        hand_status = {side: {"detected": v is not None, "fist": bool(v)} for side, v in raw_fists.items()}
+
         if block_candidate:
             self.block_hold_count += 1
             self.block_release_count = 0
@@ -370,7 +372,7 @@ class CombatDetector:
                     self.suppress_hits_until, ts_ms + (self.post_block_suppress_ms * 0.5)
                 )
                 self.settle_until = max(self.settle_until, ts_ms + self.post_block_settle_ms)
-            return {"action": "idle", "side": "", "velocity": 0.0}
+            return {"action": "idle", "side": "", "velocity": 0.0, "hand_status": hand_status}
 
         if (
             block_candidate
@@ -382,13 +384,13 @@ class CombatDetector:
             self.suppress_hits_until = ts_ms + self.post_block_suppress_ms
             self.settle_until = ts_ms + self.post_block_settle_ms
             self._reset_all(ts_ms)
-            return {"action": "block", "side": "both", "velocity": 1.0}
+            return {"action": "block", "side": "both", "velocity": 1.0, "hand_status": hand_status}
 
         if block_candidate:
-            return {"action": "idle", "side": "", "velocity": 0.0}
+            return {"action": "idle", "side": "", "velocity": 0.0, "hand_status": hand_status}
 
         if ts_ms < self.suppress_hits_until:
-            return {"action": "idle", "side": "", "velocity": 0.0}
+            return {"action": "idle", "side": "", "velocity": 0.0, "hand_status": hand_status}
 
         detected = None
         per_idle = {"left": False, "right": False}
@@ -461,7 +463,7 @@ class CombatDetector:
                 enough_radial = radial >= self.min_radial_speed or retracting
 
                 if is_fist and enough_ext and enough_speed and enough_forward and enough_radial:
-                    detected = {"action": "hit", "side": side, "velocity": float(speed)}
+                    detected = {"action": "hit", "side": side, "velocity": float(speed), "hand_status": hand_status}
                     self.last_action_ts[side] = ts_ms
                     self.state[side] = "recover"
                     self.peak_ext[side] = 0.0
@@ -486,9 +488,10 @@ class CombatDetector:
                 "action": "idle",
                 "side": "",
                 "velocity": float(max(per_speed["left"], per_speed["right"])),
+                "hand_status": hand_status
             }
 
-        return {"action": "none", "side": "", "velocity": 0.0}
+        return {"action": "none", "side": "", "velocity": 0.0, "hand_status": hand_status}
 
 
 @router.websocket("/ws/detect/{session_id}")
@@ -529,6 +532,7 @@ async def websocket_detection(websocket: WebSocket, session_id: str):
                     "side": side,
                     "points": points,
                     "velocity": vel,
+                    "hand_status": result.get("hand_status", {}),
                     "total_points": SESSIONS.get(session_id, {}).get("points", 0),
                 }
             )
