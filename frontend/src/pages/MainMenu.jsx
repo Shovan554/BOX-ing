@@ -67,8 +67,8 @@ const MainMenu = () => {
 
       {/* Menu Options Section */}
       <div className="w-full md:w-1/2 h-1/2 md:h-full flex flex-col justify-center bg-zinc-950/80 backdrop-blur-xl border-l border-white/5 relative">
-        <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
-          <span className="text-[120px] font-black italic tracking-tighter leading-none select-none">BOX</span>
+        <div className="absolute top-0 right-0 p-8 opacity-100 pointer-events-none">
+          <span className="text-[120px] font-black italic tracking-tighter leading-none select-none text-black font-mono uppercase">BOXING</span>
         </div>
         
         <div className="py-8 z-10">

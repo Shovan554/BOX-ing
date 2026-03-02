@@ -1,6 +1,9 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect, useState, Suspense } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Shield, Zap, Wifi, WifiOff, History, Activity } from 'lucide-react';
+import { Canvas } from '@react-three/fiber';
+import { PerspectiveCamera, Preload, ContactShadows } from '@react-three/drei';
+import GrannyModel from '../components/GrannyModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useSoundEffects } from '../hooks/useSoundEffects';
 
@@ -9,6 +12,7 @@ const WS_BASE_URL = 'ws://127.0.0.1:8000';
 
 const CameraTest = () => {
   const videoRef = useRef(null);
+  const grannyRef = useRef(null);
   const landmarksData = usePoseDetection(videoRef);
   const { playSound } = useSoundEffects();
   const [lastAction, setLastAction] = useState({ type: 'None', side: '', timestamp: 0 });
@@ -52,9 +56,23 @@ const CameraTest = () => {
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        if (data.action && data.action !== 'none' && data.action !== 'idle') {
+        if (data.action && data.action !== 'none') {
           const actionType = data.action.charAt(0).toUpperCase() + data.action.slice(1);
           
+          // Trigger Granny Animation
+          if (grannyRef.current) {
+            if (actionType === 'Hit') {
+              grannyRef.current.playAction(Math.random() > 0.5 ? 'right hook' : 'left hook');
+            } else if (actionType === 'Block') {
+              grannyRef.current.playAction('right block');
+            } else if (actionType === 'Idle') {
+              grannyRef.current.playAction('Idle');
+            }
+          }
+
+          // Skip logging and sound for idle
+          if (data.action === 'idle') return;
+
           // Play sound based on action
           if (actionType === 'Hit') playSound('HIT');
           if (actionType === 'Block') playSound('BLOCK');
@@ -143,74 +161,97 @@ const CameraTest = () => {
 
       <div className="flex flex-col lg:flex-row gap-8 w-full max-w-7xl h-[80vh] z-10">
         {/* Main Viewport */}
-        <div className="flex-1 relative rounded-3xl overflow-hidden border-2 border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] bg-zinc-950 group">
-          <video
-            ref={videoRef}
-            className="w-full h-full object-cover scale-x-[-1] opacity-80"
-            autoPlay
-            playsInline
-            muted
-          />
-          
-          {/* HUD Overlay */}
-          <div className="absolute inset-0 flex flex-col items-center justify-between p-10 pointer-events-none">
-            <div className="w-full flex justify-between items-start">
-              <div className="flex flex-col gap-4">
-                <div className="bg-black/60 backdrop-blur-xl p-5 rounded-2xl border-l-4 border-green-500 flex flex-col gap-1 shadow-xl">
+        <div className="flex-1 flex flex-col gap-8">
+          <div className="flex-1 relative rounded-3xl overflow-hidden border-2 border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] bg-zinc-950 group">
+            <video
+              ref={videoRef}
+              className="w-full h-full object-cover scale-x-[-1] opacity-80"
+              autoPlay
+              playsInline
+              muted
+            />
+            
+            {/* HUD Overlay */}
+            <div className="absolute inset-0 flex flex-col items-center justify-between p-10 pointer-events-none">
+              <div className="w-full flex justify-between items-start">
+                <div className="flex flex-col gap-4">
+                  <div className="bg-black/60 backdrop-blur-xl p-5 rounded-2xl border-l-4 border-green-500 flex flex-col gap-1 shadow-xl">
+                    <div className="flex items-center gap-2 text-white/40 mb-1">
+                      <Activity size={12} className="animate-pulse" />
+                      <span className="text-[10px] font-black tracking-widest uppercase">Bio-Link</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className={`w-2 h-2 rounded-full ${isReady ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500 animate-pulse'}`} />
+                      <span className="font-black text-sm text-white tracking-tighter">{isReady ? 'NEURAL LINK ACTIVE' : 'CONNECTING...'}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-black/60 backdrop-blur-xl p-5 rounded-2xl border-r-4 border-red-500 flex flex-col items-end gap-1 shadow-xl">
                   <div className="flex items-center gap-2 text-white/40 mb-1">
-                    <Activity size={12} className="animate-pulse" />
-                    <span className="text-[10px] font-black tracking-widest uppercase">Bio-Link</span>
+                    <span className="text-[10px] font-black tracking-widest uppercase">Remote Engine</span>
+                    <Wifi size={12} className={wsConnected ? 'text-green-500' : 'text-red-500'} />
                   </div>
                   <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${isReady ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500 animate-pulse'}`} />
-                    <span className="font-black text-sm text-white tracking-tighter">{isReady ? 'NEURAL LINK ACTIVE' : 'CONNECTING...'}</span>
+                    <span className="font-black text-sm text-white tracking-tighter uppercase">{wsConnected ? 'Python Core Online' : 'Linking...'}</span>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-black/60 backdrop-blur-xl p-5 rounded-2xl border-r-4 border-red-500 flex flex-col items-end gap-1 shadow-xl">
-                <div className="flex items-center gap-2 text-white/40 mb-1">
-                  <span className="text-[10px] font-black tracking-widest uppercase">Remote Engine</span>
-                  <Wifi size={12} className={wsConnected ? 'text-green-500' : 'text-red-500'} />
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="font-black text-sm text-white tracking-tighter uppercase">{wsConnected ? 'Python Core Online' : 'Linking...'}</span>
-                </div>
+              {/* Flash Feedback */}
+              <div className="flex flex-col items-center gap-4 py-12">
+                {performance.now() - lastAction.timestamp < 800 ? (
+                  <div className="flex flex-col items-center animate-in zoom-in duration-150">
+                    <div className={`text-8xl font-black italic tracking-tighter ${getActionColor(lastAction.type)} drop-shadow-[0_0_30px_rgba(255,255,255,0.2)] uppercase`}>
+                      {lastAction.side} {lastAction.type}
+                    </div>
+                    <div className="h-1 w-full bg-current mt-2 animate-out fade-out duration-700" />
+                  </div>
+                ) : (
+                  <div className="text-white/5 text-2xl font-black italic uppercase tracking-[0.8em] select-none">
+                    Stand By
+                  </div>
+                )}
+              </div>
+
+              {/* Bottom Indicators */}
+              <div className="w-full max-w-md grid grid-cols-3 gap-4 bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 shadow-2xl">
+                {['Left-Hit', 'Right-Hit', 'Block'].map((label, idx) => {
+                  const isActive = (label === 'Block' && lastAction.type === 'Block') || 
+                                 (label === 'Left-Hit' && lastAction.type === 'Hit' && lastAction.side === 'left') ||
+                                 (label === 'Right-Hit' && lastAction.type === 'Hit' && lastAction.side === 'right');
+                  return (
+                    <div key={label} className="flex flex-col items-center gap-2">
+                      <span className={`text-[9px] font-black uppercase tracking-widest transition-colors ${isActive ? 'text-white' : 'text-white/20'}`}>{label}</span>
+                      <div className={`h-1.5 w-full rounded-full transition-all duration-200 ${
+                        isActive ? (label === 'Block' ? 'bg-blue-500 shadow-[0_0_15px_#3b82f6]' : 'bg-red-500 shadow-[0_0_15px_#ef4444]') : 'bg-white/5'
+                      }`} />
+                    </div>
+                  );
+                })}
               </div>
             </div>
+          </div>
 
-            {/* Flash Feedback */}
-            <div className="flex flex-col items-center gap-4 py-12">
-              {performance.now() - lastAction.timestamp < 800 ? (
-                <div className="flex flex-col items-center animate-in zoom-in duration-150">
-                  <div className={`text-8xl font-black italic tracking-tighter ${getActionColor(lastAction.type)} drop-shadow-[0_0_30px_rgba(255,255,255,0.2)] uppercase`}>
-                    {lastAction.side} {lastAction.type}
-                  </div>
-                  <div className="h-1 w-full bg-current mt-2 animate-out fade-out duration-700" />
-                </div>
-              ) : (
-                <div className="text-white/5 text-2xl font-black italic uppercase tracking-[0.8em] select-none">
-                  Stand By
-                </div>
-              )}
-            </div>
-
-            {/* Bottom Indicators */}
-            <div className="w-full max-w-md grid grid-cols-3 gap-4 bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 shadow-2xl">
-              {['Left-Hit', 'Right-Hit', 'Block'].map((label, idx) => {
-                const isActive = (label === 'Block' && lastAction.type === 'Block') || 
-                               (label === 'Left-Hit' && lastAction.type === 'Hit' && lastAction.side === 'left') ||
-                               (label === 'Right-Hit' && lastAction.type === 'Hit' && lastAction.side === 'right');
-                return (
-                  <div key={label} className="flex flex-col items-center gap-2">
-                    <span className={`text-[9px] font-black uppercase tracking-widest transition-colors ${isActive ? 'text-white' : 'text-white/20'}`}>{label}</span>
-                    <div className={`h-1.5 w-full rounded-full transition-all duration-200 ${
-                      isActive ? (label === 'Block' ? 'bg-blue-500 shadow-[0_0_15px_#3b82f6]' : 'bg-red-500 shadow-[0_0_15px_#ef4444]') : 'bg-white/5'
-                    }`} />
-                  </div>
-                );
-              })}
-            </div>
+          {/* 3D Model Viewport */}
+          <div className="h-64 relative rounded-3xl overflow-hidden border-2 border-white/10 bg-zinc-950 shadow-2xl">
+            <Canvas 
+              shadows
+              flat
+              gl={{ antialias: true, alpha: true }}
+              dpr={[1, 1.5]}
+            >
+              <PerspectiveCamera makeDefault position={[0, 1.5, 4]} fov={50} />
+              <ambientLight intensity={1} />
+              <spotLight position={[5, 5, 5]} angle={0.15} penumbra={1} intensity={2} color="#ff0000" castShadow />
+              
+              <Suspense fallback={null}>
+                <GrannyModel ref={grannyRef} position={[0, -1, 0]} scale={1.5} />
+                <Preload all />
+              </Suspense>
+              
+              <ContactShadows opacity={0.6} scale={10} blur={2.5} far={4.5} color="#000000" />
+            </Canvas>
           </div>
         </div>
 

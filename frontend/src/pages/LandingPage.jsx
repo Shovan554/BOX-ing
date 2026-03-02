@@ -6,41 +6,6 @@ import { motion } from 'framer-motion';
 import { useSoundEffects } from '../hooks/useSoundEffects';
 import * as THREE from 'three';
 
-const Logo = () => {
-  const textRef = useRef();
-  
-  useFrame((state) => {
-    if (textRef.current) {
-      textRef.current.position.y = THREE.MathUtils.lerp(
-        textRef.current.position.y,
-        0.5,
-        0.05
-      );
-    }
-  });
-
-  return (
-    <Float speed={1.5} rotationIntensity={0.2} floatIntensity={0.3}>
-      <Text
-        ref={textRef}
-        position={[0, 5, 0]}
-        font="/assets/fonts/font.ttf"
-        fontSize={0.8}
-        color="white"
-        maxWidth={10}
-        lineHeight={1}
-        letterSpacing={0.1}
-        textAlign="center"
-        anchorX="center"
-        anchorY="middle"
-      >
-        BOX-ing
-        <meshStandardMaterial color="#ffffff" metalness={0.9} roughness={0.1} emissive="#ff0000" emissiveIntensity={0.2} />
-      </Text>
-    </Float>
-  );
-};
-
 const LandingPage = () => {
   const navigate = useNavigate();
   const { playSound } = useSoundEffects();
@@ -55,7 +20,7 @@ const LandingPage = () => {
       {/* Animated Overlay for atmosphere */}
       <div className="absolute inset-0 z-[1] bg-gradient-to-t from-red-900/20 to-transparent pointer-events-none" />
       
-      <div className="absolute inset-0 z-0 opacity-60">
+      <div className="absolute inset-0 z-0 opacity-100">
         <Canvas 
           shadows 
           flat
@@ -70,14 +35,22 @@ const LandingPage = () => {
           <pointLight position={[-10, -10, -10]} intensity={0.5} color="#00ffff" />
           
           <Suspense fallback={null}>
-            <Logo />
             <Preload all />
           </Suspense>
         </Canvas>
       </div>
 
       <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
-        <div className="mt-auto pb-32">
+        <motion.h1 
+          initial={{ y: -50, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ duration: 1, ease: "circOut" }}
+          className="text-[10rem] md:text-[14rem] font-black tracking-[0.4em] text-white font-mono uppercase mb-auto mt-64 text-center pl-[0.4em]"
+        >
+          BOXING
+        </motion.h1>
+
+        <div className="pb-32">
           <motion.button
             initial={{ y: 50, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}

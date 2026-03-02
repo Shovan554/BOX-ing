@@ -1,20 +1,15 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
 
-@font-face {
-  font-family: 'GameFont';
-  src: url('/assets/fonts/font.ttf') format('truetype');
-}
-
 :root {
-  --game-font: 'GameFont', sans-serif;
+  --game-font: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 body {
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: #000 url('/assets/images/background4.png') no-repeat center center;
+  background: #000 url('/assets/images/background.jpg') no-repeat center center;
   background-size: cover;
   color: #fff;
   font-family: var(--game-font);
