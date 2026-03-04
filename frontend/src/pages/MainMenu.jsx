@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { LogOut } from 'lucide-react';
 import { useSoundEffects } from '../hooks/useSoundEffects';
 
 const MenuItem = ({ label, onClick, onHover, index }) => (
@@ -10,14 +11,13 @@ const MenuItem = ({ label, onClick, onHover, index }) => (
     transition={{ delay: 0.1 * index, duration: 0.5, ease: "circOut" }}
     onClick={onClick}
     onMouseEnter={onHover}
-    className="group w-full text-center px-12 py-6 text-6xl font-black italic tracking-tighter hover:bg-white hover:text-black transition-all duration-300 uppercase relative overflow-hidden"
+    className="group w-full text-center px-12 py-6 text-6xl font-black italic tracking-tighter hover:text-red-600 transition-all duration-300 uppercase relative overflow-hidden"
   >
-    <div className="absolute inset-0 bg-red-600 translate-x-[-101%] group-hover:translate-x-0 transition-transform duration-300 -z-10" />
     <span className="relative z-10 block transform group-hover:scale-110 transition-transform duration-300">
       {label}
     </span>
-    {/* Animated underscore for active hover */}
-    <div className="absolute bottom-2 left-1/2 -translate-x-1/2 w-0 h-1 bg-black group-hover:w-1/3 transition-all duration-300" />
+    {/* Animated underline for active hover */}
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 w-0 group-hover:w-1/2 h-1 bg-red-600 transition-all duration-300" />
   </motion.button>
 );
 
@@ -34,8 +34,28 @@ const MainMenu = () => {
     { label: 'Camera Test', path: '/camera-test' },
   ];
 
+  const handleLogout = () => {
+    playSound('START');
+    localStorage.removeItem('access_token');
+    navigate('/auth');
+  };
+
   return (
     <div className="w-full h-full flex items-center justify-center overflow-hidden bg-[#0a0a0a] relative">
+      {/* Logout Button - Positioned bottom right */}
+      <motion.button
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 1 }}
+        onClick={handleLogout}
+        onMouseEnter={() => playSound('SELECT')}
+        className="fixed bottom-8 right-8 z-[100] flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-red-600/20 border border-white/10 hover:border-red-500/50 rounded-full transition-all duration-300 group"
+        title="Logout"
+      >
+        <span className="text-[10px] font-black tracking-[0.3em] uppercase text-white/40 group-hover:text-red-500 transition-colors">Terminate Session</span>
+        <LogOut className="w-4 h-4 text-white/40 group-hover:text-red-500 transition-colors" />
+      </motion.button>
+
       {/* Dynamic Background Elements */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <motion.div 
@@ -88,7 +108,7 @@ const MainMenu = () => {
           <h2 className="text-sm font-black tracking-[0.8em] uppercase text-white/40 pl-[0.8em]">Main Menu</h2>
         </div>
 
-        <div className="w-full flex flex-col space-y-2">
+        <div className="w-full flex flex-col space-y-2 max-h-[60vh] overflow-y-auto custom-scrollbar px-4">
           {menuOptions.map((option, index) => (
             <MenuItem
               key={option.label}

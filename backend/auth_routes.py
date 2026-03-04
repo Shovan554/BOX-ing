@@ -16,9 +16,11 @@ from database.db_users import (
     db_get_user_by_id,
 )
 
+from typing import Optional
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/auth/login", auto_error=False)
 
 
 @router.post("/signup", response_model=TokenOut)
@@ -62,3 +64,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=401, detail="User not found")
 
     return user
+
+
+async def get_current_user_optional(token: Optional[str] = Depends(oauth2_scheme_optional)):
+    if not token:
+        return None
+    try:
+        user_id = decode_token(token)
+        user = await db_get_user_by_id(user_id)
+        return user
+    except Exception:
+        return None

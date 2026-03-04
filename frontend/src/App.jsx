@@ -1,5 +1,5 @@
 import React, { Suspense, useState, useEffect } from 'react';
-import { Routes, Route, useNavigate } from 'react-router-dom';
+import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import MainMenu from './pages/MainMenu';
 import CameraTest from './pages/CameraTest';
@@ -8,6 +8,7 @@ import CreateRoom from './pages/CreateRoom';
 import Leaderboard from './pages/Leaderboard';
 import Settings from './pages/Settings';
 import PovTest from './pages/PovTest';
+import AuthPage from './pages/AuthPage';
 import Intro from './components/Intro';
 import BackgroundMusic from './components/BackgroundMusic';
 import { Maximize, Minimize, Volume2, VolumeX } from 'lucide-react';
@@ -18,6 +19,25 @@ function App() {
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
+
+  useEffect(() => {
+    // One-time clear of old tokens as requested by user
+    const hasClearedOldToken = localStorage.getItem('has_cleared_old_token_v1');
+    if (!hasClearedOldToken) {
+      localStorage.removeItem('access_token');
+      localStorage.setItem('has_cleared_old_token_v1', 'true');
+    }
+  }, []);
+
+  const isAuthenticated = !!localStorage.getItem('access_token');
+
+  useEffect(() => {
+    // If not authenticated and not already on the auth page, redirect to auth
+    if (introFinished && !isAuthenticated && location.pathname !== '/auth') {
+      navigate('/auth');
+    }
+  }, [introFinished, isAuthenticated, location.pathname, navigate]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -104,6 +124,7 @@ function App() {
 
           <Suspense fallback={<div className="flex items-center justify-center h-full bg-black">Loading...</div>}>
             <Routes>
+              <Route path="/auth" element={<AuthPage />} />
               <Route path="/" element={<LandingPage />} />
               <Route path="/menu" element={<MainMenu />} />
               <Route path="/camera-test" element={<CameraTest />} />

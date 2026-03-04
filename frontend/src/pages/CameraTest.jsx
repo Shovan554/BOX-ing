@@ -8,8 +8,8 @@ import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useHandDetection } from '../hooks/useHandDetection';
 import { useSoundEffects } from '../hooks/useSoundEffects';
 
-const API_BASE_URL = 'http://127.0.0.1:8000';
-const WS_BASE_URL = 'ws://127.0.0.1:8000';
+const API_BASE_URL = `http://${window.location.hostname}:8000`;
+const WS_BASE_URL = `ws://${window.location.hostname}:8000`;
 
 const CameraTest = () => {
   const videoRef = useRef(null);
@@ -120,9 +120,18 @@ const CameraTest = () => {
   useEffect(() => {
     const startSession = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/session/start`, { method: 'POST' });
+        const token = localStorage.getItem('access_token');
+        const headers = { 'Content-Type': 'application/json' };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const response = await fetch(`${API_BASE_URL}/session/start`, { 
+          method: 'POST',
+          headers: headers
+        });
         const data = await response.json();
-        setSessionId(data.session_id);
+        setSessionId(data.id || data.session_id);
       } catch (err) {
         console.error("Failed to start session:", err);
       }
@@ -205,12 +214,13 @@ const CameraTest = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN && landmarksData) {
       const payload = {
         landmarks: landmarksData.points,
-        timestamp: landmarksData.timestamp
+        timestamp: landmarksData.timestamp,
+        hand_data: handData ? {
+          landmarks: handData.landmarks,
+          handedness: handData.handedness,
+          timestamp: handData.timestamp
+        } : null
       };
-      
-      if (handData) {
-        payload.hand_data = handData;
-      }
       
       wsRef.current.send(JSON.stringify(payload));
     }
@@ -306,23 +316,23 @@ const CameraTest = () => {
 
               {/* Hand Status HUD */}
               <div className="w-full flex justify-between px-4">
-                <div className={`flex flex-col gap-1 transition-all duration-300 ${handStatus.left.detected ? 'opacity-100' : 'opacity-30'}`}>
+                <div className={`flex flex-col gap-1 transition-all duration-300 ${handStatus?.left?.detected ? 'opacity-100' : 'opacity-30'}`}>
                   <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${handStatus.left.detected ? (handStatus.left.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
+                    <div className={`w-2 h-2 rounded-full ${handStatus?.left?.detected ? (handStatus?.left?.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
                     <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Left Peripheral</span>
                   </div>
                   <div className="text-xl font-black italic text-white tracking-tighter uppercase">
-                    {handStatus.left.detected ? (handStatus.left.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
+                    {handStatus?.left?.detected ? (handStatus?.left?.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
                   </div>
                 </div>
 
-                <div className={`flex flex-col items-end gap-1 transition-all duration-300 ${handStatus.right.detected ? 'opacity-100' : 'opacity-30'}`}>
+                <div className={`flex flex-col items-end gap-1 transition-all duration-300 ${handStatus?.right?.detected ? 'opacity-100' : 'opacity-30'}`}>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Right Peripheral</span>
-                    <div className={`w-2 h-2 rounded-full ${handStatus.right.detected ? (handStatus.right.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
+                    <div className={`w-2 h-2 rounded-full ${handStatus?.right?.detected ? (handStatus?.right?.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
                   </div>
                   <div className="text-xl font-black italic text-white tracking-tighter uppercase">
-                    {handStatus.right.detected ? (handStatus.right.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
+                    {handStatus?.right?.detected ? (handStatus?.right?.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
                   </div>
                 </div>
               </div>
@@ -349,16 +359,21 @@ const CameraTest = () => {
               </div>
 
               {/* Bottom Indicators */}
-              <div className="w-full max-w-md grid grid-cols-3 gap-4 bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 shadow-2xl">
-                {['Left-Hit', 'Right-Hit', 'Block'].map((label, idx) => {
-                  const isActive = (label === 'Block' && lastAction.type === 'Block') || 
-                                 (label === 'Left-Hit' && lastAction.type === 'Hit' && lastAction.side === 'left') ||
-                                 (label === 'Right-Hit' && lastAction.type === 'Hit' && lastAction.side === 'right');
+              <div className="w-full max-w-lg grid grid-cols-4 gap-3 bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 shadow-2xl">
+                {['Left-Hit', 'Right-Hit', 'Block', 'Idle'].map((label) => {
+                  const isActive = (label === 'Block' && currentState === 'BLOCK') || 
+                                 (label === 'Left-Hit' && currentState === 'HIT' && lastAction.side === 'left') ||
+                                 (label === 'Right-Hit' && currentState === 'HIT' && lastAction.side === 'right') ||
+                                 (label === 'Idle' && currentState === 'IDLE');
                   return (
                     <div key={label} className="flex flex-col items-center gap-2">
                       <span className={`text-[9px] font-black uppercase tracking-widest transition-colors ${isActive ? 'text-white' : 'text-white/20'}`}>{label}</span>
                       <div className={`h-1.5 w-full rounded-full transition-all duration-200 ${
-                        isActive ? (label === 'Block' ? 'bg-blue-500 shadow-[0_0_15px_#3b82f6]' : 'bg-red-500 shadow-[0_0_15px_#ef4444]') : 'bg-white/5'
+                        isActive 
+                          ? (label === 'Block' ? 'bg-blue-500 shadow-[0_0_15px_#3b82f6]' 
+                             : label === 'Idle' ? 'bg-green-500 shadow-[0_0_15px_#22c55e]'
+                             : 'bg-red-500 shadow-[0_0_15px_#ef4444]') 
+                          : 'bg-white/5'
                       }`} />
                     </div>
                   );

@@ -9,7 +9,14 @@ const Leaderboard = () => {
   useEffect(() => {
     const fetchLeaderboard = async () => {
       try {
-        const response = await fetch('http://127.0.0.1:8000/leaderboard');
+        const token = localStorage.getItem('access_token');
+        const headers = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        const response = await fetch('http://127.0.0.1:8000/leaderboard', {
+          headers: headers
+        });
         const data = await response.json();
         setLeaders(data.leaders || []);
       } catch (error) {

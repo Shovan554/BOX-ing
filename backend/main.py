@@ -8,10 +8,11 @@ from pydantic import BaseModel, Field
 from routes.detection import router as detection_router
 from routes.sessions import router as sessions_router
 from database.datab import check_db_connection
-from auth_routes import router as auth_router, get_current_user
+from auth_routes import router as auth_router, get_current_user, get_current_user_optional
 from pymongo import ReturnDocument
 from bson import ObjectId
 from db import sessions_col, leaderboard_col
+from state import SESSIONS
 
 #setting up server and CORS
 app = FastAPI(title="BOX-ing API", version="0.3.0")
@@ -115,6 +116,8 @@ def root() -> dict:
     return {"service": "BOX-ing Placeholder API", "status": "ok", "time": utc_now()}
 
 app.include_router(auth_router)
+app.include_router(detection_router)
+
 # Protected endpoint to get current user info
 @app.get("/me")
 def me(current_user=Depends(get_current_user)):
@@ -132,12 +135,15 @@ def me(current_user=Depends(get_current_user)):
 # When starting a session, we create a new session document with the current user's ID as the owner.
 
 @app.post("/session/start")
-def start_session(payload: SessionStart, current_user=Depends(get_current_user)) -> dict:
+def start_session(payload: Optional[SessionStart] = None, current_user=Depends(get_current_user_optional)) -> dict:
+    if payload is None:
+        payload = SessionStart()
     session_id = uuid4().hex
+    user_id = current_user["id"] if current_user else None
     session = {
         "id": session_id,
-        "user_id": current_user["id"],  # ✅ session ownership
-        "player_name": (payload.player_name or current_user.get("display_name") or "Player").strip() or "Player",
+        "user_id": user_id,  # ✅ session ownership
+        "player_name": (payload.player_name or (current_user.get("display_name") if current_user else "Guest") or "Player").strip() or "Player",
         "mode": payload.mode,
         "room_code": payload.room_code,
         "points": 0,
@@ -147,13 +153,18 @@ def start_session(payload: SessionStart, current_user=Depends(get_current_user))
     }
 
     sessions_col.insert_one(session.copy())
+    
+    # Also store in memory for WebSocket detection
+    SESSIONS[session_id] = session.copy()
+    
     return session
 
 
 
 @app.get("/session/{session_id}")
-def get_session(session_id: str, current_user=Depends(get_current_user)) -> dict:
-    session = sessions_col.find_one({"id": session_id, "user_id": current_user["id"]})
+def get_session(session_id: str, current_user=Depends(get_current_user_optional)) -> dict:
+    user_id = current_user["id"] if current_user else None
+    session = sessions_col.find_one({"id": session_id, "user_id": user_id})
     if not session:
         raise HTTPException(status_code=404, detail="Session not found (or not yours)")
     return serialize_mongo(session)
@@ -161,7 +172,8 @@ def get_session(session_id: str, current_user=Depends(get_current_user)) -> dict
 # When recording an action or submitting a session, we check that the session belongs to the current user before allowing updates.
 
 @app.post("/session/action")
-def record_action(payload: ActionEvent, current_user=Depends(get_current_user)) -> dict:
+def record_action(payload: ActionEvent, current_user=Depends(get_current_user_optional)) -> dict:
+    user_id = current_user["id"] if current_user else None
     action_type = payload.action_type.lower().strip()
     if action_type not in {"jab", "block"}:
         raise HTTPException(status_code=400, detail="action_type must be jab or block")
@@ -175,7 +187,7 @@ def record_action(payload: ActionEvent, current_user=Depends(get_current_user)) 
     }
 
     updated = sessions_col.find_one_and_update(
-        {"id": payload.session_id, "user_id": current_user["id"]},  # ✅ ownership check
+        {"id": payload.session_id, "user_id": user_id},  # ✅ ownership check
         {"$inc": {"points": points}, "$set": {"last_action": last_action}},
         return_document=ReturnDocument.AFTER,
     )
@@ -197,9 +209,10 @@ def record_action(payload: ActionEvent, current_user=Depends(get_current_user)) 
 # This ensures that users see their best scores reflected on the leaderboard.
 
 @app.post("/session/submit")
-def submit_session(payload: SessionSubmit, current_user=Depends(get_current_user)) -> dict:
+def submit_session(payload: SessionSubmit, current_user=Depends(get_current_user_optional)) -> dict:
+    user_id = current_user["id"] if current_user else None
     updated = sessions_col.find_one_and_update(
-        {"id": payload.session_id, "user_id": current_user["id"]},  # ✅ ownership check
+        {"id": payload.session_id, "user_id": user_id},  # ✅ ownership check
         {"$set": {"ended_at": utc_now()}},
         return_document=ReturnDocument.AFTER,
     )
