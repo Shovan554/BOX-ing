@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowLeft, Shield, Zap, Wifi, WifiOff, History, Activity } from 'lucide-react';
 import { Canvas as ThreeCanvas } from '@react-three/fiber';
 import { PerspectiveCamera, Preload, ContactShadows } from '@react-three/drei';
-import GrannyModel from '../components/GrannyModel';
+import NinjaModel from '../components/NinjaModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useHandDetection } from '../hooks/useHandDetection';
 import { useSoundEffects } from '../hooks/useSoundEffects';
@@ -14,7 +14,7 @@ const WS_BASE_URL = `ws://${window.location.hostname}:8000`;
 const CameraTest = () => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const grannyRef = useRef(null);
+  const ninjaRef = useRef(null);
   const landmarksData = usePoseDetection(videoRef);
   const handData = useHandDetection(videoRef);
   const { playSound } = useSoundEffects();
@@ -161,14 +161,14 @@ const CameraTest = () => {
             const actionType = data.action.charAt(0).toUpperCase() + data.action.slice(1);
             setCurrentState(actionType === 'Idle' ? 'IDLE' : actionType.toUpperCase());
             
-            // Trigger Granny Animation
-            if (grannyRef.current) {
+            // Trigger Ninja Animation
+            if (ninjaRef.current) {
               if (actionType === 'Hit') {
-                grannyRef.current.playAction(Math.random() > 0.5 ? 'right hook' : 'left hook');
+                ninjaRef.current.playAction(Math.random() > 0.5 ? 'right_hit' : 'left_hit');
               } else if (actionType === 'Block') {
-                grannyRef.current.playAction('right block');
+                ninjaRef.current.playAction('block');
               } else if (actionType === 'Idle') {
-                grannyRef.current.playAction('Idle');
+                ninjaRef.current.playAction('idle');
               }
             }
 
@@ -395,7 +395,7 @@ const CameraTest = () => {
               <spotLight position={[5, 5, 5]} angle={0.15} penumbra={1} intensity={2} color="#ff0000" castShadow />
               
               <Suspense fallback={null}>
-                <GrannyModel ref={grannyRef} position={[0, -1, 0]} scale={1.5} />
+                <NinjaModel ref={ninjaRef} position={[0, -1, 0]} scale={1.5} />
                 <Preload all />
               </Suspense>
               

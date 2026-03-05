@@ -27,6 +27,9 @@ const NinjaModel = forwardRef((props, ref) => {
       }
 
       if (targetAction) {
+        // If the animation is already running, don't restart it
+        if (targetAction.isRunning() && (name === currentActionRef.current || actionName === currentActionRef.current.toLowerCase())) return;
+
         // Stop current animations smoothly
         Object.values(actions).forEach(action => {
           if (action.isRunning() && action !== targetAction) {

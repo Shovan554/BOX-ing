@@ -3,20 +3,28 @@ import { Canvas } from '@react-three/fiber';
 import { PerspectiveCamera, OrbitControls, Environment, ContactShadows } from '@react-three/drei';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Info, Zap } from 'lucide-react';
-import GrannyModel from '../components/GrannyModel';
 import NinjaModel from '../components/NinjaModel';
 
 const PovTest = () => {
   const playerRef = useRef();
   const opponentRef = useRef();
 
-  // Listen for 'w' key to trigger animations manually
+  const animations = [
+    { name: 'Idle', key: '1' },
+    { name: 'Block', key: '2' },
+    { name: 'Left_Hit', key: '3' },
+    { name: 'Right_Hit', key: '4' },
+    { name: 'Got_Hit', key: '5' },
+    { name: 'Defeat', key: '6' },
+    { name: 'Bow', key: '7' }
+  ];
+
+  // Listen for keys to trigger animations
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key.toLowerCase() === 'w') {
-        // Trigger jab/hook on both
-        if (playerRef.current) playerRef.current.playAction('Punch');
-        if (opponentRef.current) opponentRef.current.playAction('left hook');
+      const anim = animations.find(a => a.key === e.key);
+      if (anim && playerRef.current) {
+        playerRef.current.playAction(anim.name);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -36,19 +44,33 @@ const PovTest = () => {
         </Link>
         
         <div className="text-right">
-          <h2 className="text-white font-black italic tracking-tighter text-2xl uppercase">Animation Sync Test</h2>
+          <h2 className="text-white font-black italic tracking-tighter text-2xl uppercase">Ninja Animation Test</h2>
           <p className="text-red-500/60 font-mono text-[10px] tracking-widest uppercase mt-1">Experimental Perspective Engine v1.1</p>
         </div>
       </div>
 
-      {/* Instruction Overlay */}
-      <div className="absolute top-24 right-8 z-50 bg-black/40 border border-white/5 backdrop-blur-xl p-4 rounded-2xl w-64 pointer-events-none">
-        <div className="flex items-center gap-2 mb-3">
+      {/* Animation Controls Overlay */}
+      <div className="absolute top-24 right-8 z-50 bg-black/40 border border-white/5 backdrop-blur-xl p-6 rounded-2xl w-64 pointer-events-auto">
+        <div className="flex items-center gap-2 mb-4">
           <Zap size={14} className="text-yellow-500" />
-          <span className="text-[10px] font-black uppercase tracking-widest text-white">Input Control</span>
+          <span className="text-[10px] font-black uppercase tracking-widest text-white">Animation Controls</span>
         </div>
-        <p className="text-white/40 text-[11px] leading-relaxed italic">
-          Press <span className="text-white font-bold">'W'</span> to trigger simultaneous attack animations.
+        
+        <div className="grid grid-cols-1 gap-2">
+          {animations.map((anim) => (
+            <button
+              key={anim.name}
+              onClick={() => playerRef.current?.playAction(anim.name)}
+              className="flex justify-between items-center px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/5 rounded-lg transition-all text-left group"
+            >
+              <span className="text-white/60 group-hover:text-white text-[11px] font-bold uppercase tracking-wider">{anim.name}</span>
+              <span className="text-white/20 text-[9px] font-mono bg-black/40 px-2 py-0.5 rounded border border-white/5">{anim.key}</span>
+            </button>
+          ))}
+        </div>
+        
+        <p className="mt-4 text-white/40 text-[10px] leading-relaxed italic border-t border-white/5 pt-4">
+          Click buttons or press number keys to trigger animations for the player ninja.
         </p>
       </div>
 
@@ -65,7 +87,7 @@ const PovTest = () => {
           <Suspense fallback={null}>
             {/* Opponent: Facing the camera/player */}
             <group position={[0, -1, -1.5]}>
-              <GrannyModel 
+              <NinjaModel 
                 ref={opponentRef} 
                 scale={1.8} 
                 rotation={[0, 0, 0]} 
