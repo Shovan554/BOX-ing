@@ -3,13 +3,26 @@ import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
 
-const NinjaModel = forwardRef((props, ref) => {
+const NinjaModel = forwardRef(({ color, ...props }, ref) => {
   const group = useRef();
   const currentActionRef = useRef('Idle');
   const { scene, animations } = useGLTF('/assets/models/ninja/ninja.glb');
   
   // Clone the scene for multiple instances
-  const clone = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const clone = useMemo(() => {
+    const cloned = SkeletonUtils.clone(scene);
+    // Apply custom color to materials if provided
+    if (color) {
+      cloned.traverse((child) => {
+        if (child.isMesh) {
+          child.material = child.material.clone();
+          child.material.emissive = new THREE.Color(color);
+          child.material.emissiveIntensity = 0.5;
+        }
+      });
+    }
+    return cloned;
+  }, [scene, color]);
   const { actions, mixer } = useAnimations(animations, group);
 
   useImperativeHandle(ref, () => ({

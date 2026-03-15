@@ -2,7 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from routes.detection import router as detection_router
@@ -13,6 +13,13 @@ from pymongo import ReturnDocument
 from bson import ObjectId
 from db import sessions_col, leaderboard_col
 from state import SESSIONS
+from typing import List, Dict
+
+# Matchmaking queue: list of user_id or session_id
+# For simplicity, we'll store session_id here.
+MATCHMAKING_QUEUE: List[str] = []
+# Map session_id to match data (room_code, player_name, opponent_name)
+MATCHED_SESSIONS: Dict[str, dict] = {}
 
 #setting up server and CORS
 app = FastAPI(title="BOX-ing API", version="0.3.0")
@@ -110,6 +117,85 @@ def update_leaderboard(session: dict, current_user: dict) -> None:
 
 # API endpoints
 
+@app.post("/matchmaking/join")
+def join_matchmaking(session_id: str, current_user=Depends(get_current_user_optional)) -> dict:
+    if session_id in MATCHMAKING_QUEUE:
+        return {"status": "searching", "session_id": session_id}
+    
+    # If there's someone in the queue, match them
+    if MATCHMAKING_QUEUE:
+        opponent_sid = MATCHMAKING_QUEUE.pop(0)
+        room_code = f"room_{uuid4().hex[:8]}"
+        
+        player_name = SESSIONS.get(session_id, {}).get("player_name", "Player")
+        opponent_name = SESSIONS.get(opponent_sid, {}).get("player_name", "Player")
+        
+        # Update both sessions in MongoDB and memory
+        for sid in [session_id, opponent_sid]:
+            # Each player sees themselves as 'player' and other as 'opponent'
+            # But for simplicity, we'll store specific names
+            MATCHED_SESSIONS[sid] = {
+                "room_code": room_code,
+                "player_name": player_name if sid == session_id else opponent_name,
+                "opponent_name": opponent_name if sid == session_id else player_name
+            }
+            sessions_col.update_one({"id": sid}, {"$set": {"room_code": room_code}})
+            if sid in SESSIONS:
+                SESSIONS[sid]["room_code"] = room_code
+                
+        return {"status": "matched", **MATCHED_SESSIONS[session_id]}
+    
+    # Otherwise, add to queue
+    MATCHMAKING_QUEUE.append(session_id)
+    return {"status": "searching", "session_id": session_id}
+
+@app.get("/matchmaking/status/{session_id}")
+def matchmaking_status(session_id: str) -> dict:
+    if session_id in MATCHED_SESSIONS:
+        return {"status": "matched", **MATCHED_SESSIONS[session_id]}
+    if session_id in MATCHMAKING_QUEUE:
+        return {"status": "searching"}
+    return {"status": "not_in_queue"}
+
+class ConnectionManager:
+    def __init__(self):
+        # room_code -> list of websockets
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, room_code: str):
+        await websocket.accept()
+        if room_code not in self.active_connections:
+            self.active_connections[room_code] = []
+        self.active_connections[room_code].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, room_code: str):
+        if room_code in self.active_connections:
+            self.active_connections[room_code].remove(websocket)
+            if not self.active_connections[room_code]:
+                del self.active_connections[room_code]
+
+    async def broadcast(self, message: dict, room_code: str, exclude_websocket: Optional[WebSocket] = None):
+        if room_code in self.active_connections:
+            for connection in self.active_connections[room_code]:
+                if connection != exclude_websocket:
+                    await connection.send_json(message)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/{room_code}")
+async def websocket_endpoint(websocket: WebSocket, room_code: str):
+    await manager.connect(websocket, room_code)
+    try:
+        while True:
+            # Expected data: {"session_id": "...", "action": "Left_Hit" | "Right_Hit" | "Block" | "Idle"}
+            data = await websocket.receive_json()
+            # Broadcast to everyone else in the room
+            await manager.broadcast(data, room_code, exclude_websocket=websocket)
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, room_code)
+        # Notify others that this player disconnected
+        await manager.broadcast({"type": "disconnect"}, room_code)
+
 # Root endpoint for quick status check
 @app.get("/")
 def root() -> dict:
@@ -140,11 +226,21 @@ def start_session(payload: Optional[SessionStart] = None, current_user=Depends(g
         payload = SessionStart()
     session_id = uuid4().hex
     user_id = current_user["id"] if current_user else None
+    
+    # Priority: DB display_name > Payload player_name > "Guest"
+    display_name = "Guest"
+    if current_user and current_user.get("display_name"):
+        display_name = current_user["display_name"]
+    elif payload and payload.player_name and payload.player_name != "Player":
+        display_name = payload.player_name
+    elif payload and payload.player_name == "Player" and not current_user:
+        display_name = "Player"
+
     session = {
         "id": session_id,
         "user_id": user_id,  # ✅ session ownership
-        "player_name": (payload.player_name or (current_user.get("display_name") if current_user else "Guest") or "Player").strip() or "Player",
-        "mode": payload.mode,
+        "player_name": display_name.strip(),
+        "mode": payload.mode if payload else "solo",
         "room_code": payload.room_code,
         "points": 0,
         "created_at": utc_now(),
