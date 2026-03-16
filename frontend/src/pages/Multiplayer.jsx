@@ -36,13 +36,14 @@ const Multiplayer = () => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify({ mode: 'multiplayer' })
+        body: JSON.stringify({ mode: 'multiplayer', is_matchmaking: true })
       });
       const sessionData = await sessionResponse.json();
-      setSessionId(sessionData.id);
+      const sid = sessionData.id || sessionData.session_id;
+      setSessionId(sid);
 
       // 2. Join matchmaking
-      const matchResponse = await fetch(`${API_BASE_URL}/matchmaking/join?session_id=${sessionData.id}`, {
+      const matchResponse = await fetch(`${API_BASE_URL}/matchmaking/join?session_id=${sid}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -60,6 +61,32 @@ const Multiplayer = () => {
       setStatus('idle');
     }
   };
+
+  const abortSearch = async () => {
+    if (status === 'searching' && sessionId) {
+      try {
+        await fetch(`${API_BASE_URL}/matchmaking/leave?session_id=${sessionId}`, {
+          method: 'POST'
+        });
+      } catch (e) {
+        console.error("Failed to leave matchmaking queue:", e);
+      }
+    }
+    playSound('SELECT');
+    setStatus('idle');
+  };
+
+  useEffect(() => {
+    // If user leaves the page while searching, try to remove them from queue
+    return () => {
+      if (status === 'searching' && sessionId) {
+        fetch(`${API_BASE_URL}/matchmaking/leave?session_id=${sessionId}`, {
+          method: 'POST',
+          keepalive: true // Ensure request finishes even if page is closed
+        }).catch(console.error);
+      }
+    };
+  }, [status, sessionId]);
 
   useEffect(() => {
     let interval;
@@ -141,14 +168,16 @@ const Multiplayer = () => {
       <div className="absolute bottom-12 left-12 w-12 h-12 border-b border-l border-white/10" />
       <div className="absolute bottom-12 right-12 w-12 h-12 border-b border-r border-white/10" />
 
-      <Link 
-        to="/menu" 
-        onClick={() => playSound('SELECT')}
+      <button 
+        onClick={async () => {
+          await abortSearch();
+          navigate('/menu');
+        }}
         className="fixed top-12 left-24 flex items-center gap-2 text-white/40 hover:text-white transition-all bg-white/5 px-4 py-2 rounded-lg border border-white/5 backdrop-blur-md z-[60] group"
       >
         <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" />
         <span className="font-black tracking-[0.3em] text-[10px] uppercase">Abort Search</span>
-      </Link>
+      </button>
 
       <AnimatePresence mode="wait">
         {status !== 'connected' ? (

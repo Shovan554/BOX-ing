@@ -4,8 +4,9 @@ import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 const MEDIAPIPE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 
-export const usePoseDetection = (videoRef, onResults) => {
+export const usePoseDetection = (videoRef) => {
   const [poseLandmarker, setPoseLandmarker] = useState(null);
+  const [results, setResults] = useState(null);
   const requestRef = useRef();
   const lastVideoTimeRef = useRef(-1);
 
@@ -33,12 +34,10 @@ export const usePoseDetection = (videoRef, onResults) => {
           lastVideoTimeRef.current = videoRef.current.currentTime;
           const result = poseLandmarker.detectForVideo(videoRef.current, startTimeMs);
           if (result.landmarks && result.landmarks.length > 0) {
-            if (onResults) {
-              onResults({
-                points: result.landmarks[0],
-                timestamp: startTimeMs
-              });
-            }
+            setResults({
+              points: result.landmarks[0],
+              timestamp: startTimeMs
+            });
           }
         }
       }
@@ -47,7 +46,7 @@ export const usePoseDetection = (videoRef, onResults) => {
 
     requestRef.current = requestAnimationFrame(detect);
     return () => cancelAnimationFrame(requestRef.current);
-  }, [poseLandmarker, onResults, videoRef]);
+  }, [poseLandmarker, videoRef]);
 
-  return poseLandmarker !== null;
+  return results;
 };

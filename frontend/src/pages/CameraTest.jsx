@@ -62,10 +62,12 @@ const CameraTest = () => {
 
     // Draw Pose Landmarks
     if (landmarksData?.points) {
-      // Key pose connections for boxing (shoulders, arms)
+      // Key pose connections for boxing (full body)
       const connections = [
         [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], // Shoulders and arms
-        [11, 23], [12, 24], [23, 24] // Torso
+        [11, 23], [12, 24], [23, 24], // Torso
+        [23, 25], [24, 26], [25, 27], [26, 28], // Legs
+        [27, 29], [28, 30], [29, 31], [30, 32], [27, 31], [28, 32] // Feet
       ];
       
       connections.forEach(([i, j]) => {
