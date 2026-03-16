@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useRef, useCallback } from 'react';
 
 // Landmark indices for MediaPipe Pose
 const NOSE = 0;
@@ -9,12 +9,25 @@ const RIGHT_SHOULDER = 12;
 const LEFT_ELBOW = 13;
 const RIGHT_ELBOW = 14;
 
-export const useCombatGestures = (landmarks) => {
+export const useCombatGestures = () => {
   const [gesture, setGesture] = useState(null);
   const cooldownRef = useRef(false);
   const lastGestureTimeRef = useRef(0);
 
-  useEffect(() => {
+  const triggerGesture = useCallback((name) => {
+    setGesture(name);
+    lastGestureTimeRef.current = Date.now();
+    
+    // Simple cooldown for hits to prevent spam
+    if (name.includes('Hit') || name === 'Bow') {
+      cooldownRef.current = true;
+      setTimeout(() => {
+        cooldownRef.current = false;
+      }, 800);
+    }
+  }, []);
+
+  const processLandmarks = useCallback((landmarks) => {
     if (!landmarks || !landmarks.points || cooldownRef.current) return;
 
     const points = landmarks.points;
@@ -37,7 +50,6 @@ export const useCombatGestures = (landmarks) => {
     }
 
     // Check for "Right Hit" (Right wrist moves forward/across)
-    // In mirror mode, right wrist is actually on the left of the screen (lower X)
     if (points[RIGHT_WRIST].x < points[NOSE].x - 0.25) {
       triggerGesture('Right_Hit');
       return;
@@ -51,23 +63,9 @@ export const useCombatGestures = (landmarks) => {
 
     // If nothing detected for a while, could be Idle
     if (now - lastGestureTimeRef.current > 500) {
-      setGesture('Idle');
+      setGesture(prev => prev !== 'Idle' ? 'Idle' : prev);
     }
+  }, [triggerGesture]);
 
-  }, [landmarks]);
-
-  const triggerGesture = (name) => {
-    setGesture(name);
-    lastGestureTimeRef.current = Date.now();
-    
-    // Simple cooldown for hits to prevent spam
-    if (name.includes('Hit') || name === 'Bow') {
-      cooldownRef.current = true;
-      setTimeout(() => {
-        cooldownRef.current = false;
-      }, 800);
-    }
-  };
-
-  return gesture;
+  return [gesture, processLandmarks];
 };

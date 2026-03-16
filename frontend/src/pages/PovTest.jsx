@@ -18,6 +18,7 @@ const PovTest = () => {
   const roomCode = location.state?.roomCode;
   const playerName = location.state?.playerName || 'You';
   const opponentName = location.state?.opponentName || 'Opponent';
+  const sessionId = location.state?.sessionId;
   
   const [isOpponentDisconnected, setIsOpponentDisconnected] = useState(false);
   const [showForfeitModal, setShowForfeitModal] = useState(false);
@@ -26,6 +27,12 @@ const PovTest = () => {
   const [feedback, setFeedback] = useState(null); // { text: 'Hit!', color: 'text-green-500' }
   const [localLastAction, setLocalLastAction] = useState(null);
   const [isBlocking, setIsBlocking] = useState(false);
+  const [scores, setScores] = useState({}); // { sessionId: score }
+  const [matchEnded, setMatchEnded] = useState(false);
+  const [winner, setWinner] = useState(null);
+  const [isForfeit, setIsForfeit] = useState(false);
+  const pendingHitTimeoutRef = useRef(null);
+  const localHasHitInLastSecRef = useRef(false);
 
   // Initialize camera
   useEffect(() => {
@@ -45,8 +52,8 @@ const PovTest = () => {
   }, []);
 
   // Gesture detection
-  const landmarks = usePoseDetection(videoRef);
-  const gesture = useCombatGestures(landmarks);
+  const [gesture, processLandmarks] = useCombatGestures();
+  const isPoseReady = usePoseDetection(videoRef, processLandmarks);
 
   // Sync animations over WebSockets
   useEffect(() => {
@@ -63,6 +70,39 @@ const PovTest = () => {
       
       if (data.type === 'disconnect') {
         setIsOpponentDisconnected(true);
+        // If opponent disconnects, player wins by forfeit
+        if (!matchEnded) {
+          if (pendingHitTimeoutRef.current) clearTimeout(pendingHitTimeoutRef.current);
+          setWinner('YOU');
+          setMatchEnded(true);
+          setIsForfeit(true);
+          opponentRef.current?.playAction('defeat', true);
+        }
+        return;
+      }
+
+      // Handle score updates from server
+      if (data.type === 'score_update') {
+        setScores(data.scores || {});
+        return;
+      }
+
+      // Handle match end
+      if (data.type === 'match_end') {
+        if (pendingHitTimeoutRef.current) clearTimeout(pendingHitTimeoutRef.current);
+        
+        setScores(data.final_scores || {});
+        const isWinner = data.winner_session_id === sessionId;
+        setWinner(isWinner ? 'YOU' : opponentName);
+        setMatchEnded(true);
+        setIsForfeit(data.reason === 'forfeit');
+        
+        // Play defeat animation for the loser
+        if (!isWinner) {
+          playerRef.current?.playAction('defeat', true);
+        } else {
+          opponentRef.current?.playAction('defeat', true);
+        }
         return;
       }
 
@@ -86,8 +126,17 @@ const PovTest = () => {
             // Notify opponent their hit was blocked
             socketRef.current.send(JSON.stringify({ type: 'block_event', timestamp: Date.now() }));
           } else {
-            showFeedback('BIG HIT RECEIVED!', 'text-red-500');
-            playerRef.current?.playAction('Got_Hit');
+            // New logic: 1 second delay for the local player to "react"
+            // If they hit back within 1s, they don't play Got_Hit
+            localHasHitInLastSecRef.current = false;
+            if (pendingHitTimeoutRef.current) clearTimeout(pendingHitTimeoutRef.current);
+            
+            pendingHitTimeoutRef.current = setTimeout(() => {
+              if (!localHasHitInLastSecRef.current && !matchEnded) {
+                showFeedback('BIG HIT RECEIVED!', 'text-red-500');
+                playerRef.current?.playAction('Got_Hit');
+              }
+            }, 1000);
           }
         }
       }
@@ -110,6 +159,9 @@ const PovTest = () => {
     
     // Only allow gestures in fighting state (Bow is now automatic)
     if (gameState === 'fighting') {
+      // Don't register new actions if we are currently animating a hit or being hit
+      if (playerRef.current?.isBusy()) return;
+
       if (gesture === 'Block') {
         setIsBlocking(true);
         playLocalAction('Block');
@@ -132,13 +184,30 @@ const PovTest = () => {
   };
 
   const playLocalAction = (actionName) => {
-    if (playerRef.current) {
-      playerRef.current.playAction(actionName);
+    if (playerRef.current && !matchEnded) {
+      if (actionName === 'Left_Hit' || actionName === 'Right_Hit') {
+        localHasHitInLastSecRef.current = true;
+      }
+      
+      const played = playerRef.current.playAction(actionName);
+      if (!played) return false;
+
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        // Send normal action for animation broadcast
         socketRef.current.send(JSON.stringify({ 
+          session_id: sessionId,
           action: actionName,
           timestamp: Date.now()
         }));
+
+        // If it's a hit, also send as a hit_event for scoring
+        if (actionName === 'Left_Hit' || actionName === 'Right_Hit') {
+          socketRef.current.send(JSON.stringify({ 
+            type: 'hit_event',
+            session_id: sessionId,
+            timestamp: Date.now()
+          }));
+        }
       }
     }
   };
@@ -178,7 +247,11 @@ const PovTest = () => {
 
   const confirmForfeit = () => {
     if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({ type: 'disconnect', reason: 'forfeit' }));
+      socketRef.current.send(JSON.stringify({ 
+        type: 'disconnect', 
+        reason: 'forfeit',
+        session_id: sessionId 
+      }));
     }
     navigate('/menu');
   };
@@ -211,15 +284,23 @@ const PovTest = () => {
         </button>
         
         <div className="text-right flex flex-col items-end">
-          <div className="flex items-center gap-4 mb-1">
+          <div className="flex items-center gap-6 mb-1">
             <div className="flex flex-col items-end">
-              <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-widest">Player</span>
-              <h3 className="text-white font-black italic tracking-tighter text-xl uppercase">{playerName}</h3>
+              <span className="text-[12px] font-mono text-cyan-400 uppercase tracking-widest font-black">Local Hero</span>
+              <div className="flex items-baseline gap-4 mt-1">
+                <span className="text-cyan-400 font-black text-6xl drop-shadow-[0_0_15px_rgba(34,211,238,0.5)]">{scores[sessionId] || 0}</span>
+                <h3 className="text-white font-black italic tracking-tighter text-6xl uppercase leading-none drop-shadow-lg">{playerName}</h3>
+              </div>
             </div>
-            <div className="w-1 h-10 bg-white/10" />
+            <div className="w-[2px] h-20 bg-white/20 mx-4" />
             <div className="flex flex-col items-start text-left">
-              <span className="text-[10px] font-mono text-red-500 uppercase tracking-widest">Opponent</span>
-              <h3 className="text-white font-black italic tracking-tighter text-xl uppercase">{opponentName}</h3>
+              <span className="text-[12px] font-mono text-red-500 uppercase tracking-widest font-black">Hostile Rival</span>
+              <div className="flex items-baseline gap-4 mt-1">
+                <h3 className="text-white font-black italic tracking-tighter text-6xl uppercase leading-none drop-shadow-lg">{opponentName}</h3>
+                <span className="text-red-500 font-black text-6xl drop-shadow-[0_0_15px_rgba(239,68,68,0.5)]">
+                  {Object.entries(scores).find(([sid]) => sid !== sessionId)?.[1] || 0}
+                </span>
+              </div>
             </div>
           </div>
           <p className="text-white/20 font-mono text-[9px] tracking-[0.5em] uppercase">Arena Sync {roomCode}</p>
@@ -268,12 +349,16 @@ const PovTest = () => {
           
           <Suspense fallback={null}>
             <group position={[-0.8, -1, -0.8]}>
-              <Html position={[0, 4.5, 0]} center distanceFactor={10}>
-                <div className="flex flex-col items-center gap-2 pointer-events-none select-none">
-                  <div className="bg-black/60 backdrop-blur-md border border-red-500/30 px-4 py-1.5 rounded-lg flex items-center gap-3">
-                    <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.8)]" />
-                    <span className="text-white font-black italic tracking-widest text-sm uppercase whitespace-nowrap">
-                      {opponentName}
+              <Html position={[0, 4.8, 0]} center distanceFactor={10}>
+                <div className="flex flex-col items-center gap-4 pointer-events-none select-none">
+                  <div className="bg-black/80 backdrop-blur-xl border-2 border-red-500/50 px-10 py-4 rounded-3xl flex items-center gap-6 shadow-[0_0_50px_rgba(239,68,68,0.3)]">
+                    <div className="w-4 h-4 bg-red-500 rounded-full animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.8)]" />
+                    <span className="text-white font-black italic tracking-tighter text-6xl uppercase whitespace-nowrap drop-shadow-lg">
+                      {opponentName} 
+                    </span>
+                    <div className="w-[2px] h-12 bg-white/20 mx-2" />
+                    <span className="text-red-500 font-black text-6xl drop-shadow-lg">
+                      {Object.entries(scores).find(([sid]) => sid !== sessionId)?.[1] || 0}
                     </span>
                   </div>
                   {isOpponentDisconnected && (
@@ -320,7 +405,7 @@ const PovTest = () => {
         )}
       </AnimatePresence>
 
-      {/* Forfeit Modal omitted for brevity, keeping same logic */}
+      {/* Forfeit Modal */}
       <AnimatePresence>
         {showForfeitModal && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
@@ -335,6 +420,39 @@ const PovTest = () => {
                   <button onClick={confirmForfeit} className="py-3 px-6 bg-red-600 hover:bg-red-700 rounded-xl text-white font-black italic uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-red-600/20">Yes, Forfeit</button>
                 </div>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Match End Button (Standalone at bottom) */}
+      <AnimatePresence>
+        {matchEnded && (
+          <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-[200] w-full max-w-xs px-4">
+            <motion.div 
+              initial={{ y: 100, opacity: 0 }} 
+              animate={{ y: 0, opacity: 1 }} 
+              className="flex flex-col items-center gap-4"
+            >
+              <div className="bg-black/60 backdrop-blur-md px-6 py-2 rounded-full border border-white/10 mb-2">
+                <p className="text-white font-black italic uppercase tracking-tighter text-sm">
+                  {winner === 'YOU' ? 'VICTORY ACHIEVED' : 'DEFEAT SUSTAINED'}
+                </p>
+              </div>
+              <button 
+                onClick={() => navigate('/results', { 
+                  state: { 
+                    winner, 
+                    scores, 
+                    playerName, 
+                    opponentName, 
+                    sessionId 
+                  } 
+                })} 
+                className="w-full py-5 bg-red-600 text-white rounded-2xl font-black italic uppercase text-lg tracking-tighter hover:bg-white hover:text-black transition-all transform hover:scale-105 shadow-[0_0_50px_rgba(220,38,38,0.4)]"
+              >
+                Show Results
+              </button>
             </motion.div>
           </div>
         )}

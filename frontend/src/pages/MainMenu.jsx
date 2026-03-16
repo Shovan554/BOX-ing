@@ -29,8 +29,6 @@ const MainMenu = () => {
     { label: 'Multiplayer', path: '/multiplayer' },
     { label: 'Create Room', path: '/create-room' },
     { label: 'Leaderboard', path: '/leaderboard' },
-    { label: 'Settings', path: '/settings' },
-    { label: 'POV Test', path: '/pov-test' },
     { label: 'Camera Test', path: '/camera-test' },
   ];
 

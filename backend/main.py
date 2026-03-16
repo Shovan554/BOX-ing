@@ -92,28 +92,34 @@ def compute_points(action_type: str, velocity: float) -> int:
 # The update_leaderboard function updates the leaderboard with the user's best score.
 # It checks if the current session's points are greater than or equal to the existing points for that user and updates accordingly.
 # This ensures that users see their best scores reflected on the leaderboard.
-def update_leaderboard(session: dict, current_user: dict) -> None:
+def update_leaderboard(session: dict, current_user: dict, is_win: bool = False) -> None:
     user_id = session.get("user_id")
     if not user_id:
         return
 
-    record = {
-        "user_id": user_id,
-        "display_name": current_user.get("display_name") or session.get("player_name") or "Player",
-        "points": session.get("points", 0),
-        "mode": session.get("mode"),
-        "updated_at": utc_now(),
+    update_query = {
+        "$set": {
+            "display_name": current_user.get("display_name") or session.get("player_name") or "Player",
+            "updated_at": utc_now(),
+        }
     }
+    
+    # In solo mode, we track high scores (points)
+    if session.get("mode") == "solo":
+        current = leaderboard_col.find_one({"user_id": user_id})
+        current_points = (current or {}).get("points", 0)
+        if session.get("points", 0) >= current_points:
+            update_query["$set"]["points"] = session.get("points", 0)
+    
+    # In multiplayer, we increment wins
+    if is_win:
+        update_query["$inc"] = {"multiplayer_wins": 1}
 
-    current = leaderboard_col.find_one({"user_id": user_id})
-    current_points = (current or {}).get("points", 0)
-
-    if record["points"] >= current_points:
-        leaderboard_col.update_one(
-            {"user_id": user_id},
-            {"$set": record},
-            upsert=True,
-        )
+    leaderboard_col.update_one(
+        {"user_id": user_id},
+        update_query,
+        upsert=True,
+    )
 
 # API endpoints
 
@@ -179,11 +185,14 @@ class ConnectionManager:
     def __init__(self):
         # room_code -> list of websockets
         self.active_connections: Dict[str, List[WebSocket]] = {}
+        # room_code -> dict of session_id -> score
+        self.scores: Dict[str, Dict[str, int]] = {}
 
     async def connect(self, websocket: WebSocket, room_code: str):
         await websocket.accept()
         if room_code not in self.active_connections:
             self.active_connections[room_code] = []
+            self.scores[room_code] = {}
         self.active_connections[room_code].append(websocket)
 
     def disconnect(self, websocket: WebSocket, room_code: str):
@@ -191,12 +200,22 @@ class ConnectionManager:
             self.active_connections[room_code].remove(websocket)
             if not self.active_connections[room_code]:
                 del self.active_connections[room_code]
+                if room_code in self.scores:
+                    del self.scores[room_code]
 
     async def broadcast(self, message: dict, room_code: str, exclude_websocket: Optional[WebSocket] = None):
         if room_code in self.active_connections:
             for connection in self.active_connections[room_code]:
                 if connection != exclude_websocket:
                     await connection.send_json(message)
+
+    def update_score(self, room_code: str, session_id: str, points: int = 1):
+        if room_code in self.scores:
+            if session_id not in self.scores[room_code]:
+                self.scores[room_code][session_id] = 0
+            self.scores[room_code][session_id] += points
+            return self.scores[room_code]
+        return None
 
 manager = ConnectionManager()
 
@@ -205,13 +224,67 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str):
     await manager.connect(websocket, room_code)
     try:
         while True:
-            # Expected data: {"session_id": "...", "action": "Left_Hit" | "Right_Hit" | "Block" | "Idle"}
+            # Expected data: {"session_id": "...", "action": "Left_Hit" | "Right_Hit", "type": "hit_event"}
             data = await websocket.receive_json()
-            # Broadcast to everyone else in the room
+            
+            # Handle hit events for scoring
+            if data.get("type") == "hit_event" and data.get("session_id"):
+                sid = data["session_id"]
+                all_scores = manager.update_score(room_code, sid)
+                
+                # Broadcast the hit and the new scores
+                await manager.broadcast({
+                    "type": "score_update",
+                    "session_id": sid,
+                    "scores": all_scores
+                }, room_code)
+                
+                # Check for match end (e.g., first to 10)
+                if all_scores and all_scores.get(sid, 0) >= 10:
+                    await manager.broadcast({
+                        "type": "match_end",
+                        "winner_session_id": sid,
+                        "final_scores": all_scores
+                    }, room_code)
+                    
+                    # Update winner's wins in DB
+                    session = sessions_col.find_one({"id": sid})
+                    if session and session.get("user_id"):
+                        # Get user display name
+                        from db import users_col
+                        user = users_col.find_one({"id": session["user_id"]})
+                        update_leaderboard(session, user or {}, is_win=True)
+
+            # Broadcast everything to the other player
             await manager.broadcast(data, room_code, exclude_websocket=websocket)
+            
+            # Handle explicit forfeit
+            if data.get("type") == "disconnect" and data.get("reason") == "forfeit" and data.get("session_id"):
+                forfeiter_sid = data["session_id"]
+                # Find the winner (the other person in the room)
+                room = rooms_col.find_one({"room_code": room_code})
+                if room and room.get("users"):
+                    winner_data = next((u for u in room["users"] if u.get("session_id") != forfeiter_sid), None)
+                    if winner_data:
+                        winner_sid = winner_data["session_id"]
+                        
+                        # Broadcast match end due to forfeit
+                        await manager.broadcast({
+                            "type": "match_end",
+                            "winner_session_id": winner_sid,
+                            "final_scores": manager.scores.get(room_code, {}),
+                            "reason": "forfeit"
+                        }, room_code)
+                        
+                        # Update winner's wins in DB
+                        session = sessions_col.find_one({"id": winner_sid})
+                        if session and session.get("user_id"):
+                            from db import users_col
+                            user = users_col.find_one({"id": session["user_id"]})
+                            update_leaderboard(session, user or {}, is_win=True)
+            
     except WebSocketDisconnect:
         manager.disconnect(websocket, room_code)
-        # Notify others that this player disconnected
         await manager.broadcast({"type": "disconnect"}, room_code)
 
 @app.get("/room/{room_code}")
@@ -386,7 +459,8 @@ def submit_session(payload: SessionSubmit, current_user=Depends(get_current_user
 @app.get("/leaderboard")
 def leaderboard(limit: int = 10) -> dict:
     limit = max(1, min(limit, 50))
-    leaders = leaderboard_col.find().sort("points", -1).limit(limit)
+    # Sort by multiplayer_wins first, then points
+    leaders = leaderboard_col.find().sort([("multiplayer_wins", -1), ("points", -1)]).limit(limit)
     return {"leaders": [serialize_mongo(doc) for doc in leaders]}
 
 
