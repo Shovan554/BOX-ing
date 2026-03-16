@@ -1,4 +1,5 @@
 from __future__ import annotations
+import random
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import uuid4
@@ -6,12 +7,11 @@ from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from routes.detection import router as detection_router
-from routes.sessions import router as sessions_router
 from database.datab import check_db_connection
 from auth_routes import router as auth_router, get_current_user, get_current_user_optional
 from pymongo import ReturnDocument
 from bson import ObjectId
-from db import sessions_col, leaderboard_col
+from db import sessions_col, leaderboard_col, rooms_col
 from state import SESSIONS
 from typing import List, Dict
 
@@ -125,7 +125,7 @@ def join_matchmaking(session_id: str, current_user=Depends(get_current_user_opti
     # If there's someone in the queue, match them
     if MATCHMAKING_QUEUE:
         opponent_sid = MATCHMAKING_QUEUE.pop(0)
-        room_code = f"room_{uuid4().hex[:8]}"
+        room_code = str(random.randint(100000, 999999))
         
         player_name = SESSIONS.get(session_id, {}).get("player_name", "Player")
         opponent_name = SESSIONS.get(opponent_sid, {}).get("player_name", "Player")
@@ -142,6 +142,24 @@ def join_matchmaking(session_id: str, current_user=Depends(get_current_user_opti
             sessions_col.update_one({"id": sid}, {"$set": {"room_code": room_code}})
             if sid in SESSIONS:
                 SESSIONS[sid]["room_code"] = room_code
+        
+        # Add the matched room to the rooms collection
+        matched_users = []
+        for sid in [session_id, opponent_sid]:
+            s_data = SESSIONS.get(sid, {})
+            matched_users.append({
+                "user_id": s_data.get("user_id"),
+                "session_id": sid,
+                "player_name": s_data.get("player_name", "Player")
+            })
+        
+        rooms_col.update_one(
+            {"room_code": room_code},
+            {
+                "$set": {"users": matched_users, "created_at": utc_now()}
+            },
+            upsert=True
+        )
                 
         return {"status": "matched", **MATCHED_SESSIONS[session_id]}
     
@@ -196,6 +214,33 @@ async def websocket_endpoint(websocket: WebSocket, room_code: str):
         # Notify others that this player disconnected
         await manager.broadcast({"type": "disconnect"}, room_code)
 
+@app.get("/room/{room_code}")
+def get_room(room_code: str) -> dict:
+    room = rooms_col.find_one({"room_code": room_code})
+    if not room:
+        raise HTTPException(status_code=404, detail="Room not found")
+    return serialize_mongo(room)
+
+@app.get("/room/{room_code}/status")
+def room_status(room_code: str) -> dict:
+    room = rooms_col.find_one({"room_code": room_code})
+    if not room:
+        return {"status": "not_found"}
+    
+    users = room.get("users", [])
+    if len(users) >= 2:
+        return {
+            "status": "ready",
+            "users": users,
+            "room_code": room_code
+        }
+    
+    return {
+        "status": "waiting",
+        "users": users,
+        "room_code": room_code
+    }
+
 # Root endpoint for quick status check
 @app.get("/")
 def root() -> dict:
@@ -236,12 +281,14 @@ def start_session(payload: Optional[SessionStart] = None, current_user=Depends(g
     elif payload and payload.player_name == "Player" and not current_user:
         display_name = "Player"
 
+    room_code = payload.room_code if payload and payload.room_code else str(random.randint(100000, 999999))
+
     session = {
         "id": session_id,
         "user_id": user_id,  # ✅ session ownership
         "player_name": display_name.strip(),
         "mode": payload.mode if payload else "solo",
-        "room_code": payload.room_code,
+        "room_code": room_code,
         "points": 0,
         "created_at": utc_now(),
         "ended_at": None,
@@ -249,6 +296,22 @@ def start_session(payload: Optional[SessionStart] = None, current_user=Depends(g
     }
 
     sessions_col.insert_one(session.copy())
+    
+    # Add user to the rooms collection
+    rooms_col.update_one(
+        {"room_code": room_code},
+        {
+            "$addToSet": {
+                "users": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                    "player_name": display_name.strip()
+                }
+            },
+            "$setOnInsert": {"created_at": utc_now()}
+        },
+        upsert=True
+    )
     
     # Also store in memory for WebSocket detection
     SESSIONS[session_id] = session.copy()

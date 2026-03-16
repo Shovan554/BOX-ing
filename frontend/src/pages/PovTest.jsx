@@ -2,14 +2,17 @@ import React, { Suspense, useRef, useEffect, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { PerspectiveCamera, OrbitControls, Environment, ContactShadows, Html } from '@react-three/drei';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Info, Zap, WifiOff, AlertTriangle, X } from 'lucide-react';
+import { ArrowLeft, Info, Zap, WifiOff, AlertTriangle, X, Camera } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import NinjaModel from '../components/NinjaModel';
+import { usePoseDetection } from '../hooks/usePoseDetection';
+import { useCombatGestures } from '../hooks/useCombatGestures';
 
 const PovTest = () => {
   const playerRef = useRef();
   const opponentRef = useRef();
   const socketRef = useRef();
+  const videoRef = useRef();
   const location = useLocation();
   const navigate = useNavigate();
   const roomCode = location.state?.roomCode;
@@ -19,66 +22,154 @@ const PovTest = () => {
   const [isOpponentDisconnected, setIsOpponentDisconnected] = useState(false);
   const [showForfeitModal, setShowForfeitModal] = useState(false);
   const [showFightAnim, setShowFightAnim] = useState(false);
+  const [gameState, setGameState] = useState('waiting'); // waiting, bowing, fighting
+  const [feedback, setFeedback] = useState(null); // { text: 'Hit!', color: 'text-green-500' }
+  const [localLastAction, setLocalLastAction] = useState(null);
+  const [isBlocking, setIsBlocking] = useState(false);
+
+  // Initialize camera
+  useEffect(() => {
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        if (videoRef.current) videoRef.current.srcObject = stream;
+      } catch (err) {
+        console.error("Camera error:", err);
+      }
+    };
+    startCamera();
+    return () => {
+      const stream = videoRef.current?.srcObject;
+      stream?.getTracks().forEach(track => track.stop());
+    };
+  }, []);
+
+  // Gesture detection
+  const landmarks = usePoseDetection(videoRef);
+  const gesture = useCombatGestures(landmarks);
 
   // Sync animations over WebSockets
   useEffect(() => {
     if (!roomCode) return;
 
     let ws;
-    const timeoutId = setTimeout(() => {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/${roomCode}`;
-      ws = new WebSocket(wsUrl);
-      socketRef.current = ws;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/${roomCode}`;
+    ws = new WebSocket(wsUrl);
+    socketRef.current = ws;
 
-      ws.onopen = () => {
-        // Start "FIGHT!" animation shortly after connection
-        setTimeout(() => setShowFightAnim(true), 1000);
-      };
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      
+      if (data.type === 'disconnect') {
+        setIsOpponentDisconnected(true);
+        return;
+      }
 
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        
-        if (data.type === 'disconnect') {
-          setIsOpponentDisconnected(true);
-          return;
+      // Game state sync
+      if (data.type === 'gameState') {
+        setGameState(data.state);
+        if (data.state === 'fighting') {
+          setShowFightAnim(true);
         }
+        return;
+      }
 
-        if (data.action && opponentRef.current) {
-          let targetAction = data.action;
-          opponentRef.current.playAction(targetAction);
-          
-          if (targetAction === 'Left_Hit' || targetAction === 'Right_Hit') {
+      if (data.action && opponentRef.current) {
+        const targetAction = data.action;
+        opponentRef.current.playAction(targetAction);
+        
+        // Combat logic: if opponent hits, check if we are blocking
+        if (targetAction === 'Left_Hit' || targetAction === 'Right_Hit') {
+          if (isBlocking) {
+            showFeedback('BLOCKED!', 'text-blue-500');
+            // Notify opponent their hit was blocked
+            socketRef.current.send(JSON.stringify({ type: 'block_event', timestamp: Date.now() }));
+          } else {
+            showFeedback('BIG HIT RECEIVED!', 'text-red-500');
             playerRef.current?.playAction('Got_Hit');
           }
         }
-      };
+      }
 
-      ws.onclose = () => {
-        setIsOpponentDisconnected(true);
-      };
-    }, 500); // Small delay to ensure component is fully ready
-
-    return () => {
-      clearTimeout(timeoutId);
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
+      if (data.type === 'block_event') {
+        showFeedback('OPPONENT BLOCKED!', 'text-yellow-500');
       }
     };
-  }, [roomCode]);
+
+    ws.onclose = () => setIsOpponentDisconnected(true);
+
+    return () => {
+      if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+    };
+  }, [roomCode, isBlocking]);
+
+  // Handle local gestures
+  useEffect(() => {
+    if (!gesture || gesture === localLastAction) return;
+    
+    // Only allow gestures in fighting state (Bow is now automatic)
+    if (gameState === 'fighting') {
+      if (gesture === 'Block') {
+        setIsBlocking(true);
+        playLocalAction('Block');
+      } else {
+        setIsBlocking(false);
+        if (gesture === 'Left_Hit' || gesture === 'Right_Hit') {
+          playLocalAction(gesture);
+          showFeedback('HIT!', 'text-green-500');
+        } else if (gesture === 'Idle') {
+          playLocalAction('Idle');
+        }
+      }
+    }
+    setLocalLastAction(gesture);
+  }, [gesture, gameState]);
+
+  const showFeedback = (text, color) => {
+    setFeedback({ text, color });
+    setTimeout(() => setFeedback(null), 1000);
+  };
 
   const playLocalAction = (actionName) => {
     if (playerRef.current) {
       playerRef.current.playAction(actionName);
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
-        try {
-          socketRef.current.send(JSON.stringify({ action: actionName }));
-        } catch (e) {
-          console.error("Failed to send action:", e);
-        }
+        socketRef.current.send(JSON.stringify({ 
+          action: actionName,
+          timestamp: Date.now()
+        }));
       }
     }
   };
+
+  // Automated Bowing Sequence
+  useEffect(() => {
+    if (roomCode && gameState === 'waiting') {
+      // 1. Move to bowing after 1.5s
+      setTimeout(() => {
+        setGameState('bowing');
+        playLocalAction('Bow');
+        
+        // 2. Start fight after bowing animation completes (3s total)
+        setTimeout(() => {
+          if (socketRef.current?.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify({ type: 'gameState', state: 'fighting' }));
+          }
+        }, 3000);
+      }, 1500);
+    }
+  }, [roomCode, gameState]);
+
+  const animations = [
+    { name: 'Idle', key: '1' },
+    { name: 'Block', key: '2' },
+    { name: 'Left_Hit', key: '3' },
+    { name: 'Right_Hit', key: '4' },
+    { name: 'Got_Hit', key: '5' },
+    { name: 'Defeat', key: '6' },
+    { name: 'Bow', key: '7' }
+  ];
 
   const forfeitMatch = (e) => {
     e.preventDefault();
@@ -92,30 +183,23 @@ const PovTest = () => {
     navigate('/menu');
   };
 
-  const animations = [
-    { name: 'Idle', key: '1' },
-    { name: 'Block', key: '2' },
-    { name: 'Left_Hit', key: '3' },
-    { name: 'Right_Hit', key: '4' },
-    { name: 'Got_Hit', key: '5' },
-    { name: 'Defeat', key: '6' },
-    { name: 'Bow', key: '7' }
-  ];
-
-  // Listen for keys to trigger animations
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      const anim = animations.find(a => a.key === e.key);
-      if (anim) {
-        playLocalAction(anim.name);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [animations]);
-
   return (
-    <div className="w-full h-full relative bg-[#050505]">
+    <div className="w-full h-full relative bg-[#050505] overflow-hidden">
+      {/* Camera Preview */}
+      <div className="absolute bottom-8 left-8 z-[60] w-48 aspect-video bg-black/40 border border-white/10 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-md">
+        <video 
+          ref={videoRef}
+          autoPlay 
+          playsInline 
+          muted 
+          className="w-full h-full object-cover scale-x-[-1]"
+        />
+        <div className="absolute top-2 left-2 bg-black/60 px-2 py-0.5 rounded border border-white/5 flex items-center gap-1">
+          <Camera size={10} className="text-cyan-400" />
+          <span className="text-[8px] font-black uppercase tracking-widest text-white/60">Live Feed</span>
+        </div>
+      </div>
+
       {/* HUD Header */}
       <div className="absolute top-0 left-0 w-full p-8 z-50 flex justify-between items-start pointer-events-none">
         <button 
@@ -123,42 +207,53 @@ const PovTest = () => {
           className="flex items-center gap-3 text-white/40 hover:text-white transition-all bg-zinc-900/80 px-6 py-3 rounded-xl border border-white/5 backdrop-blur-md pointer-events-auto group"
         >
           <ArrowLeft size={18} className="group-hover:-translate-x-1 transition-transform" />
-          <span className="font-black tracking-[0.2em] text-xs uppercase">Return to Menu</span>
+          <span className="font-black tracking-[0.2em] text-xs uppercase">Forfeit Match</span>
         </button>
         
-        <div className="text-right">
-          <h2 className="text-white font-black italic tracking-tighter text-2xl uppercase">
-            {roomCode ? `ROOM: ${roomCode}` : 'Ninja Animation Test'}
-          </h2>
-          <p className="text-red-500/60 font-mono text-[10px] tracking-widest uppercase mt-1">
-            {roomCode ? 'MULTIPLAYER COMBAT READY' : 'Experimental Perspective Engine v1.1'}
-          </p>
+        <div className="text-right flex flex-col items-end">
+          <div className="flex items-center gap-4 mb-1">
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-widest">Player</span>
+              <h3 className="text-white font-black italic tracking-tighter text-xl uppercase">{playerName}</h3>
+            </div>
+            <div className="w-1 h-10 bg-white/10" />
+            <div className="flex flex-col items-start text-left">
+              <span className="text-[10px] font-mono text-red-500 uppercase tracking-widest">Opponent</span>
+              <h3 className="text-white font-black italic tracking-tighter text-xl uppercase">{opponentName}</h3>
+            </div>
+          </div>
+          <p className="text-white/20 font-mono text-[9px] tracking-[0.5em] uppercase">Arena Sync {roomCode}</p>
         </div>
       </div>
 
-      {/* Animation Controls Overlay */}
-      <div className="absolute top-24 right-8 z-50 bg-black/40 border border-white/5 backdrop-blur-xl p-6 rounded-2xl w-64 pointer-events-auto">
-        <div className="flex items-center gap-2 mb-4">
-          <Zap size={14} className="text-yellow-500" />
-          <span className="text-[10px] font-black uppercase tracking-widest text-white">Animation Controls</span>
-        </div>
-        
-        <div className="grid grid-cols-1 gap-2">
-          {animations.map((anim) => (
-            <button
-              key={anim.name}
-              onClick={() => playLocalAction(anim.name)}
-              className="flex justify-between items-center px-4 py-2 bg-white/5 hover:bg-white/10 border border-white/5 rounded-lg transition-all text-left group"
-            >
-              <span className="text-white/60 group-hover:text-white text-[11px] font-bold uppercase tracking-wider">{anim.name}</span>
-              <span className="text-white/20 text-[9px] font-mono bg-black/40 px-2 py-0.5 rounded border border-white/5">{anim.key}</span>
-            </button>
-          ))}
-        </div>
-        
-        <p className="mt-4 text-white/40 text-[10px] leading-relaxed italic border-t border-white/5 pt-4">
-          Click buttons or press number keys to trigger animations for the player ninja.
-        </p>
+      {/* Feedback Overlay */}
+      <AnimatePresence>
+        {feedback && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.5, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 1.5 }}
+            className="absolute inset-0 z-[110] flex items-center justify-center pointer-events-none"
+          >
+            <h2 className={`text-8xl font-black italic uppercase tracking-tighter drop-shadow-2xl ${feedback.color}`}>
+              {feedback.text}
+            </h2>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Game State Overlay */}
+      <div className="absolute top-1/4 left-1/2 -translate-x-1/2 z-50 pointer-events-none text-center">
+        {gameState === 'bowing' && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="flex flex-col items-center gap-4"
+          >
+            <h2 className="text-4xl font-black italic text-white uppercase tracking-tighter">Prepare for Duel</h2>
+            <p className="text-white/40 font-mono text-xs uppercase tracking-[0.3em] animate-pulse">Match Starting...</p>
+          </motion.div>
+        )}
       </div>
 
       {/* 3D Scene */}
@@ -172,11 +267,11 @@ const PovTest = () => {
           <pointLight position={[-10, 10, -10]} intensity={1} color="#0066ff" />
           
           <Suspense fallback={null}>
-            {/* Opponent: Facing the player, slightly left and further back */}
             <group position={[-0.8, -1, -0.8]}>
               <Html position={[0, 4.5, 0]} center distanceFactor={10}>
                 <div className="flex flex-col items-center gap-2 pointer-events-none select-none">
-                  <div className="bg-black/60 backdrop-blur-md border border-red-500/30 px-4 py-1.5 rounded-lg">
+                  <div className="bg-black/60 backdrop-blur-md border border-red-500/30 px-4 py-1.5 rounded-lg flex items-center gap-3">
+                    <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(239,68,68,0.8)]" />
                     <span className="text-white font-black italic tracking-widest text-sm uppercase whitespace-nowrap">
                       {opponentName}
                     </span>
@@ -193,30 +288,11 @@ const PovTest = () => {
                   )}
                 </div>
               </Html>
-              <NinjaModel 
-                ref={opponentRef} 
-                scale={1.8} 
-                rotation={[0, Math.PI / 4, 0]} 
-                color="#ff0000"
-              />
-              <mesh position={[0, 3, 0]}>
-                <sphereGeometry args={[0.05, 8, 8]} />
-                <meshStandardMaterial color="red" emissive="red" emissiveIntensity={2} />
-              </mesh>
+              <NinjaModel ref={opponentRef} scale={1.8} rotation={[0, Math.PI / 4, 0]} color="#ff0000" />
             </group>
 
-            {/* Player: Ninja (Facing Opponent, closer and on the right) */}
             <group position={[0.8, -1, 0.8]}>
-              <NinjaModel 
-                ref={playerRef} 
-                scale={1.8} 
-                rotation={[0, -Math.PI * 0.75, 0]} 
-                color="#00ffff"
-              />
-              <mesh position={[0, 3, 0]}>
-                <sphereGeometry args={[0.05, 8, 8]} />
-                <meshStandardMaterial color="cyan" emissive="cyan" emissiveIntensity={2} />
-              </mesh>
+              <NinjaModel ref={playerRef} scale={1.8} rotation={[0, -Math.PI * 0.75, 0]} color="#00ffff" />
             </group>
 
             <Environment preset="night" />
@@ -225,24 +301,6 @@ const PovTest = () => {
 
           <gridHelper args={[20, 20, 0x333333, 0x111111]} position={[0, -1.01, 0]} />
         </Canvas>
-      </div>
-
-      {/* Control Tips Overlay */}
-      <div className="absolute bottom-12 right-12 flex flex-col items-end gap-2 z-50 pointer-events-none opacity-40">
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <span className="text-[10px] font-black uppercase tracking-widest text-cyan-400 block">Cyan Marker</span>
-            <span className="text-xs font-bold text-white uppercase italic">Ninja (You - Right)</span>
-          </div>
-          <div className="w-1 h-8 bg-cyan-400/50" />
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="text-right">
-            <span className="text-[10px] font-black uppercase tracking-widest text-red-500 block">Red Marker</span>
-            <span className="text-xs font-bold text-white uppercase italic">Opponent (Left)</span>
-          </div>
-          <div className="w-1 h-8 bg-red-500/50" />
-        </div>
       </div>
 
       {/* "FIGHT!" Animation */}
@@ -262,44 +320,19 @@ const PovTest = () => {
         )}
       </AnimatePresence>
 
-      {/* Custom Forfeit Modal */}
+      {/* Forfeit Modal omitted for brevity, keeping same logic */}
       <AnimatePresence>
         {showForfeitModal && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-              onClick={() => setShowForfeitModal(false)}
-            />
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-sm bg-zinc-950 border border-white/10 rounded-2xl p-8 shadow-2xl"
-            >
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setShowForfeitModal(false)} />
+            <motion.div initial={{ scale: 0.9, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.9, opacity: 0, y: 20 }} className="relative w-full max-w-sm bg-zinc-950 border border-white/10 rounded-2xl p-8 shadow-2xl">
               <div className="flex flex-col items-center text-center">
-                <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6">
-                  <AlertTriangle size={32} className="text-red-500" />
-                </div>
+                <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mb-6"><AlertTriangle size={32} className="text-red-500" /></div>
                 <h2 className="text-2xl font-black italic text-white uppercase tracking-tighter mb-2">Forfeit Match?</h2>
-                <p className="text-white/40 text-sm font-medium mb-8">
-                  Leaving now will count as a defeat. Are you sure you want to exit the arena?
-                </p>
+                <p className="text-white/40 text-sm font-medium mb-8">Leaving now will count as a defeat. Are you sure you want to exit the arena?</p>
                 <div className="grid grid-cols-2 gap-4 w-full">
-                  <button 
-                    onClick={() => setShowForfeitModal(false)}
-                    className="py-3 px-6 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white font-bold uppercase text-[10px] tracking-widest transition-all"
-                  >
-                    Stay & Fight
-                  </button>
-                  <button 
-                    onClick={confirmForfeit}
-                    className="py-3 px-6 bg-red-600 hover:bg-red-700 rounded-xl text-white font-black italic uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-red-600/20"
-                  >
-                    Yes, Forfeit
-                  </button>
+                  <button onClick={() => setShowForfeitModal(false)} className="py-3 px-6 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-white font-bold uppercase text-[10px] tracking-widest transition-all">Stay & Fight</button>
+                  <button onClick={confirmForfeit} className="py-3 px-6 bg-red-600 hover:bg-red-700 rounded-xl text-white font-black italic uppercase text-[10px] tracking-widest transition-all shadow-lg shadow-red-600/20">Yes, Forfeit</button>
                 </div>
               </div>
             </motion.div>

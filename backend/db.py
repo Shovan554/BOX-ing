@@ -19,5 +19,6 @@ db = client[DB_NAME]
 
 users_col = db["users"]
 sessions_col = db["sessions"]
+rooms_col = db["rooms"]
 events_col = db["events"]
 leaderboard_col = db["leaderboard"]

@@ -17,6 +17,7 @@ db = client[DB_NAME]
 leaderboard_col = db["leaderboard"]
 users_col = db["users"]
 sessions_col = db["sessions"]
+rooms_col = db["rooms"]
 events_col = db["events"]
 
 async def check_db_connection():
