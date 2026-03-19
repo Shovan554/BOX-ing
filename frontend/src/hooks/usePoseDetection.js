@@ -3,10 +3,8 @@ import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
 const MEDIAPIPE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 
-// FIX: switched from pose_landmarker_lite to pose_landmarker_full.
-// The lite model trades accuracy for speed — it struggles with fast arm
-// movement and produces noisy Z values, both critical for boxing detection.
-const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
+// SWITCHED TO LITE MODEL for raw speed. Full model is too slow for real-time boxing.
+const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
 
 export const usePoseDetection = (videoRef) => {
   const [poseLandmarker, setPoseLandmarker] = useState(null);
@@ -24,6 +22,10 @@ export const usePoseDetection = (videoRef) => {
         },
         runningMode: 'VIDEO',
         numPoses: 1,
+        minPoseDetectionConfidence: 0.5,
+        minPosePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+        outputSegmentationMasks: false,
       });
       setPoseLandmarker(landmarker);
     };

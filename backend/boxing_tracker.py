@@ -1,24 +1,3 @@
-"""
-boxing_tracker.py
------------------
-Standalone real-time boxing detection using your webcam.
-Detects: LEFT HIT | RIGHT HIT | BLOCK | IDLE
-
-BLOCK gesture: bring both fists up close to your face (cover-up guard).
-The detector measures wrist-to-nose distance — when both wrists are
-near your head simultaneously, it fires BLOCK. This is:
-  - Natural boxing guard
-  - Impossible to trigger during a punch (arm is extended away from face)
-  - Robust to arm crossing / wrist landmark swapping
-
-Run:
-    pip install mediapipe opencv-python
-    python boxing_tracker.py
-
-Controls:
-    Q  — quit
-    R  — reset baseline
-"""
 
 import os
 os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"

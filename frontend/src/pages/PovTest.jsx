@@ -6,13 +6,15 @@ import { ArrowLeft, Info, Zap, WifiOff, AlertTriangle, X, Camera } from 'lucide-
 import { motion, AnimatePresence } from 'framer-motion';
 import NinjaModel from '../components/NinjaModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
-import { useCombatGestures } from '../hooks/useCombatGestures';
+import { useHandDetection } from '../hooks/useHandDetection';
 
 const PovTest = () => {
   const playerRef = useRef();
   const opponentRef = useRef();
   const socketRef = useRef();
+  const detectionSocketRef = useRef();
   const videoRef = useRef();
+  const canvasRef = useRef();
   const location = useLocation();
   const navigate = useNavigate();
   const roomCode = location.state?.roomCode;
@@ -51,19 +53,149 @@ const PovTest = () => {
     };
   }, []);
 
-  // Gesture detection
-  const [gesture, processLandmarks] = useCombatGestures();
-  const isPoseReady = usePoseDetection(videoRef, processLandmarks);
+  // Detection hooks
+  const landmarksData = usePoseDetection(videoRef);
+  const handData = useHandDetection(videoRef);
+
+  // Draw landmarks on canvas
+  useEffect(() => {
+    if (!canvasRef.current || !videoRef.current) return;
+    const ctx = canvasRef.current.getContext('2d');
+    const video = videoRef.current;
+
+    canvasRef.current.width = video.clientWidth;
+    canvasRef.current.height = video.clientHeight;
+
+    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+
+    const W = canvasRef.current.width;
+    const H = canvasRef.current.height;
+
+    // Coords are normalised 0-1; video is CSS mirrored so we mirror X here too
+    const sx = (x) => W - x * W;
+    const sy = (y) => y * H;
+
+    const drawPoint = (x, y, color = 'red', size = 2) => {
+      ctx.beginPath();
+      ctx.arc(sx(x), sy(y), size, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.fill();
+    };
+
+    const drawLine = (p1, p2, color = 'white', width = 1) => {
+      ctx.beginPath();
+      ctx.moveTo(sx(p1.x), sy(p1.y));
+      ctx.lineTo(sx(p2.x), sy(p2.y));
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.stroke();
+    };
+
+    // Draw Pose Landmarks
+    if (landmarksData?.points) {
+      const connections = [
+        [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+        [11, 23], [12, 24], [23, 24],
+        [23, 25], [24, 26], [25, 27], [26, 28]
+      ];
+
+      connections.forEach(([i, j]) => {
+        const p1 = landmarksData.points[i];
+        const p2 = landmarksData.points[j];
+        if (p1 && p2 && p1.visibility > 0.5 && p2.visibility > 0.5) {
+          drawLine(p1, p2, 'rgba(255,255,255,0.3)', 1.5);
+        }
+      });
+
+      landmarksData.points.forEach((pt, i) => {
+        if (pt.visibility > 0.5) {
+          let color = 'rgba(255,255,255,0.5)';
+          if (i === 0) color = '#ff4444';
+          if (i === 15 || i === 16) color = '#00f2ff';
+          drawPoint(pt.x, pt.y, color, i === 0 ? 3 : 1.5);
+        }
+      });
+    }
+
+    // Draw Hand Landmarks
+    if (handData?.landmarks) {
+      handData.landmarks.forEach((hand, handIdx) => {
+        const h = handData.handedness[handIdx]?.[0] ?? {};
+        const label = h.categoryName ?? h.category_name ?? h.label ?? '';
+        const isLeft = label === 'Left';
+        const color = isLeft ? '#ff0055' : '#00ff55';
+
+        const handConnections = [
+          [0,1],[1,2],[2,3],[3,4],
+          [0,5],[5,6],[6,7],[7,8],
+          [5,9],[9,10],[10,11],[11,12],
+          [9,13],[13,14],[14,15],[15,16],
+          [13,17],[17,18],[18,19],[19,20],[0,17]
+        ];
+
+        handConnections.forEach(([i, j]) => {
+          drawLine(hand[i], hand[j], color, 1);
+        });
+
+        hand.forEach(pt => drawPoint(pt.x, pt.y, color, 1.5));
+      });
+    }
+  }, [landmarksData, handData]);
 
   // Sync animations over WebSockets
   useEffect(() => {
-    if (!roomCode) return;
+    if (!roomCode || !sessionId) return;
 
     let ws;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/${roomCode}`;
     ws = new WebSocket(wsUrl);
     socketRef.current = ws;
+
+    // Detection Socket
+    const detWsUrl = `${protocol}//${window.location.hostname}:8000/ws/detect/${sessionId}`;
+    const detWs = new WebSocket(detWsUrl);
+    detectionSocketRef.current = detWs;
+
+    detWs.onopen = () => console.log('Detection backend linked');
+    detWs.onmessage = (event) => {
+      if (gameState !== 'fighting' || matchEnded) return;
+      
+      const data = JSON.parse(event.data);
+      const action = data.action;
+
+      if (data.total_points !== undefined) {
+        setScores(prev => ({ ...prev, [sessionId]: data.total_points }));
+        // Broadcast score to opponent since room socket doesn't track it
+        if (socketRef.current?.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({
+            type: 'score_sync',
+            session_id: sessionId,
+            score: data.total_points
+          }));
+        }
+      }
+
+      if (action === 'block') {
+        setIsBlocking(true);
+        if (!playerRef.current?.isBusy()) {
+          playLocalAction('Block');
+        }
+      } else {
+        setIsBlocking(false);
+        if (action === 'hit') {
+          const hitType = data.side === 'left' ? 'Left_Hit' : 'Right_Hit';
+          if (!playerRef.current?.isBusy()) {
+            playLocalAction(hitType);
+            showFeedback('HIT!', 'text-green-500');
+          }
+        } else if (action === 'idle') {
+          if (!playerRef.current?.isBusy()) {
+            playLocalAction('Idle');
+          }
+        }
+      }
+    };
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
@@ -84,6 +216,15 @@ const PovTest = () => {
       // Handle score updates from server
       if (data.type === 'score_update') {
         setScores(data.scores || {});
+        return;
+      }
+
+      // Handle score sync
+      if (data.type === 'score_sync') {
+        setScores(prev => ({
+          ...prev,
+          [data.session_id]: data.score
+        }));
         return;
       }
 
@@ -150,33 +291,25 @@ const PovTest = () => {
 
     return () => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.close();
+      if (detWs && detWs.readyState === WebSocket.OPEN) detWs.close();
     };
-  }, [roomCode, isBlocking]);
+  }, [roomCode, isBlocking, gameState, matchEnded, sessionId]);
 
-  // Handle local gestures
+  // Send landmarks to detection backend
   useEffect(() => {
-    if (!gesture || gesture === localLastAction) return;
-    
-    // Only allow gestures in fighting state (Bow is now automatic)
-    if (gameState === 'fighting') {
-      // Don't register new actions if we are currently animating a hit or being hit
-      if (playerRef.current?.isBusy()) return;
-
-      if (gesture === 'Block') {
-        setIsBlocking(true);
-        playLocalAction('Block');
-      } else {
-        setIsBlocking(false);
-        if (gesture === 'Left_Hit' || gesture === 'Right_Hit') {
-          playLocalAction(gesture);
-          showFeedback('HIT!', 'text-green-500');
-        } else if (gesture === 'Idle') {
-          playLocalAction('Idle');
-        }
-      }
+    if (detectionSocketRef.current?.readyState === WebSocket.OPEN && landmarksData) {
+      const payload = {
+        landmarks: landmarksData.points,
+        timestamp: landmarksData.timestamp,
+        hand_data: handData ? {
+          landmarks: handData.landmarks,
+          handedness: handData.handedness,
+          timestamp: handData.timestamp
+        } : null
+      };
+      detectionSocketRef.current.send(JSON.stringify(payload));
     }
-    setLocalLastAction(gesture);
-  }, [gesture, gameState]);
+  }, [landmarksData, handData]);
 
   const showFeedback = (text, color) => {
     setFeedback({ text, color });
@@ -266,6 +399,10 @@ const PovTest = () => {
           playsInline 
           muted 
           className="w-full h-full object-cover scale-x-[-1]"
+        />
+        <canvas
+          ref={canvasRef}
+          className="absolute inset-0 w-full h-full pointer-events-none"
         />
         <div className="absolute top-2 left-2 bg-black/60 px-2 py-0.5 rounded border border-white/5 flex items-center gap-1">
           <Camera size={10} className="text-cyan-400" />
