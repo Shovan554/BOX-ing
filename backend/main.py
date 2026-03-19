@@ -262,23 +262,31 @@ class ConnectionManager:
         if room_code in self.active_connections:
             for connection in self.active_connections[room_code]:
                 if connection != exclude_websocket:
-                    await connection.send_json(message)
+                    try:
+                        await connection.send_json(message)
+                    except Exception:
+                        pass
 
 manager = ConnectionManager()
 
-@app.websocket("/ws/{room_code}")
-async def websocket_endpoint(websocket: WebSocket, room_code: str):
+@app.websocket("/ws/{room_code}/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, room_code: str, session_id: str):
     await manager.connect(websocket, room_code)
     try:
         while True:
-            # Expected data: {"session_id": "...", "action": "Left_Hit" | "Right_Hit" | "Block" | "Idle"}
+            # Expected data: {"action": "Left_Hit" | "Right_Hit" | "Block" | "Idle", ...}
             data = await websocket.receive_json()
+            # Ensure it has session_id
+            data["session_id"] = session_id
             # Broadcast to everyone else in the room
             await manager.broadcast(data, room_code, exclude_websocket=websocket)
     except WebSocketDisconnect:
         manager.disconnect(websocket, room_code)
-        # Notify others that this player disconnected
-        await manager.broadcast({"type": "disconnect"}, room_code)
+        # Notify others that this specific player disconnected
+        await manager.broadcast({"type": "disconnect", "session_id": session_id}, room_code)
+    except Exception as e:
+        print(f"Room WebSocket error ({session_id}): {e}")
+        manager.disconnect(websocket, room_code)
 
 @app.get("/room/{room_code}")
 def get_room(room_code: str) -> dict:

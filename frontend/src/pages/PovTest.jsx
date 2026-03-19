@@ -148,7 +148,7 @@ const PovTest = () => {
 
     let ws;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/${roomCode}`;
+    const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/${roomCode}/${sessionId}`;
     ws = new WebSocket(wsUrl);
     socketRef.current = ws;
 
@@ -200,15 +200,21 @@ const PovTest = () => {
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       
+      // Ignore messages from ourselves
+      if (data.session_id === sessionId) return;
+
       if (data.type === 'disconnect') {
-        setIsOpponentDisconnected(true);
-        // If opponent disconnects, player wins by forfeit
-        if (!matchEnded) {
-          if (pendingHitTimeoutRef.current) clearTimeout(pendingHitTimeoutRef.current);
-          setWinner('YOU');
-          setMatchEnded(true);
-          setIsForfeit(true);
-          opponentRef.current?.playAction('defeat', true);
+        // Only process disconnect if it's NOT us
+        if (data.session_id && data.session_id !== sessionId) {
+          setIsOpponentDisconnected(true);
+          // If opponent disconnects, player wins by forfeit
+          if (!matchEnded) {
+            if (pendingHitTimeoutRef.current) clearTimeout(pendingHitTimeoutRef.current);
+            setWinner('YOU');
+            setMatchEnded(true);
+            setIsForfeit(true);
+            opponentRef.current?.playAction('defeat', true);
+          }
         }
         return;
       }
@@ -328,7 +334,6 @@ const PovTest = () => {
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
         // Send normal action for animation broadcast
         socketRef.current.send(JSON.stringify({ 
-          session_id: sessionId,
           action: actionName,
           timestamp: Date.now()
         }));
@@ -337,7 +342,6 @@ const PovTest = () => {
         if (actionName === 'Left_Hit' || actionName === 'Right_Hit') {
           socketRef.current.send(JSON.stringify({ 
             type: 'hit_event',
-            session_id: sessionId,
             timestamp: Date.now()
           }));
         }
