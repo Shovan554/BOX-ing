@@ -140,7 +140,28 @@ const PovTest = () => {
         hand.forEach(pt => drawPoint(pt.x, pt.y, color, 1.5));
       });
     }
-  }, [landmarksData, handData]);
+
+    // Draw detected action text
+    if (localLastAction && Date.now() - localLastAction.timestamp < 1000) {
+      const { action, side } = localLastAction;
+      if (action !== 'idle' && action !== 'none') {
+        ctx.fillStyle = action === 'hit' ? '#00ff00' : '#00aaff';
+        ctx.font = 'black 20px font-mono';
+        ctx.textAlign = 'center';
+        const label = `${side.toUpperCase()} ${action.toUpperCase()}`;
+        ctx.fillText(label, W / 2, 30);
+        
+        // Background for readability
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        const metrics = ctx.measureText(label);
+        ctx.fillRect(W/2 - metrics.width/2 - 10, 5, metrics.width + 20, 35);
+        
+        // Text again above background
+        ctx.fillStyle = action === 'hit' ? '#00ff00' : '#00aaff';
+        ctx.fillText(label, W / 2, 30);
+      }
+    }
+  }, [landmarksData, handData, localLastAction]);
 
   // Sync animations over WebSockets
   useEffect(() => {
@@ -163,6 +184,13 @@ const PovTest = () => {
       
       const data = JSON.parse(event.data);
       const action = data.action;
+      
+      // Update localLastAction for camera overlay
+      setLocalLastAction({ 
+        action: action, 
+        side: data.side || '', 
+        timestamp: Date.now() 
+      });
 
       if (data.total_points !== undefined) {
         setScores(prev => ({ ...prev, [sessionId]: data.total_points }));
