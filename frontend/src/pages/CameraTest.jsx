@@ -33,28 +33,30 @@ const CameraTest = () => {
     if (!canvasRef.current || !videoRef.current) return;
     const ctx = canvasRef.current.getContext('2d');
     const video = videoRef.current;
-    
-    // Set canvas size to match video display size
+
     canvasRef.current.width = video.clientWidth;
     canvasRef.current.height = video.clientHeight;
-    
+
     ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    
+
+    const W = canvasRef.current.width;
+    const H = canvasRef.current.height;
+
+    // Coords are normalised 0-1; video is CSS mirrored so we mirror X here too
+    const sx = (x) => W - x * W;
+    const sy = (y) => y * H;
+
     const drawPoint = (x, y, color = 'red', size = 3) => {
       ctx.beginPath();
-      // Mirror x since video is mirrored
-      const mirroredX = canvasRef.current.width - (x * canvasRef.current.width);
-      ctx.arc(mirroredX, y * canvasRef.current.height, size, 0, 2 * Math.PI);
+      ctx.arc(sx(x), sy(y), size, 0, 2 * Math.PI);
       ctx.fillStyle = color;
       ctx.fill();
     };
 
     const drawLine = (p1, p2, color = 'white', width = 1) => {
       ctx.beginPath();
-      const x1 = canvasRef.current.width - (p1.x * canvasRef.current.width);
-      const x2 = canvasRef.current.width - (p2.x * canvasRef.current.width);
-      ctx.moveTo(x1, p1.y * canvasRef.current.height);
-      ctx.lineTo(x2, p2.y * canvasRef.current.height);
+      ctx.moveTo(sx(p1.x), sy(p1.y));
+      ctx.lineTo(sx(p2.x), sy(p2.y));
       ctx.strokeStyle = color;
       ctx.lineWidth = width;
       ctx.stroke();
@@ -62,26 +64,24 @@ const CameraTest = () => {
 
     // Draw Pose Landmarks
     if (landmarksData?.points) {
-      // Key pose connections for boxing (full body)
       const connections = [
-        [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], // Shoulders and arms
-        [11, 23], [12, 24], [23, 24], // Torso
-        [23, 25], [24, 26], [25, 27], [26, 28], // Legs
-        [27, 29], [28, 30], [29, 31], [30, 32], [27, 31], [28, 32] // Feet
+        [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+        [11, 23], [12, 24], [23, 24],
+        [23, 25], [24, 26], [25, 27], [26, 28],
+        [27, 29], [28, 30], [29, 31], [30, 32], [27, 31], [28, 32]
       ];
-      
+
       connections.forEach(([i, j]) => {
         const p1 = landmarksData.points[i];
         const p2 = landmarksData.points[j];
         if (p1 && p2 && p1.visibility > 0.5 && p2.visibility > 0.5) {
-          drawLine(p1, p2, 'rgba(255, 255, 255, 0.3)', 2);
+          drawLine(p1, p2, 'rgba(255,255,255,0.3)', 2);
         }
       });
 
       landmarksData.points.forEach((pt, i) => {
         if (pt.visibility > 0.5) {
-          // Color coding: 0 is nose, 11-16 are arms
-          let color = 'rgba(255, 255, 255, 0.5)';
+          let color = 'rgba(255,255,255,0.5)';
           if (i === 0) color = 'red';
           if (i === 15 || i === 16) color = '#00f2ff'; // Wrists
           drawPoint(pt.x, pt.y, color, i === 0 ? 4 : 2);
@@ -90,24 +90,26 @@ const CameraTest = () => {
     }
 
     // Draw Hand Landmarks
+    // FIX: handle both camelCase (MediaPipe JS) and snake_case gracefully
     if (handData?.landmarks) {
       handData.landmarks.forEach((hand, handIdx) => {
-        const isLeft = handData.handedness[handIdx][0].category_name === 'Left';
+        const h = handData.handedness[handIdx]?.[0] ?? {};
+        const label = h.categoryName ?? h.category_name ?? h.label ?? '';
+        const isLeft = label === 'Left';
         const color = isLeft ? '#ff0055' : '#00ff55';
-        
-        // Draw hand connections
+
         const handConnections = [
-          [0, 1], [1, 2], [2, 3], [3, 4], // thumb
-          [0, 5], [5, 6], [6, 7], [7, 8], // index
-          [5, 9], [9, 10], [10, 11], [11, 12], // middle
-          [9, 13], [13, 14], [14, 15], [15, 16], // ring
-          [13, 17], [17, 18], [18, 19], [19, 20], [0, 17] // pinky
+          [0,1],[1,2],[2,3],[3,4],
+          [0,5],[5,6],[6,7],[7,8],
+          [5,9],[9,10],[10,11],[11,12],
+          [9,13],[13,14],[14,15],[15,16],
+          [13,17],[17,18],[18,19],[19,20],[0,17]
         ];
-        
+
         handConnections.forEach(([i, j]) => {
           drawLine(hand[i], hand[j], color, 1.5);
         });
-        
+
         hand.forEach(pt => drawPoint(pt.x, pt.y, color, 2));
       });
     }
@@ -124,18 +126,16 @@ const CameraTest = () => {
       try {
         const token = localStorage.getItem('access_token');
         const headers = { 'Content-Type': 'application/json' };
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
+        if (token) headers['Authorization'] = `Bearer ${token}`;
 
-        const response = await fetch(`${API_BASE_URL}/session/start`, { 
+        const response = await fetch(`${API_BASE_URL}/session/start`, {
           method: 'POST',
-          headers: headers
+          headers
         });
         const data = await response.json();
         setSessionId(data.id || data.session_id);
       } catch (err) {
-        console.error("Failed to start session:", err);
+        console.error('Failed to start session:', err);
       }
     };
     startSession();
@@ -147,26 +147,28 @@ const CameraTest = () => {
 
     const connectWs = () => {
       const ws = new WebSocket(`${WS_BASE_URL}/ws/detect/${sessionId}`);
-      
+
       ws.onopen = () => {
-        console.log("Connected to detection backend");
+        console.log('Connected to detection backend');
         setWsConnected(true);
       };
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+
         if (data.hand_status) {
           setHandStatus(data.hand_status);
         }
+
         if (data.action) {
           if (data.action !== 'none') {
             const actionType = data.action.charAt(0).toUpperCase() + data.action.slice(1);
             setCurrentState(actionType === 'Idle' ? 'IDLE' : actionType.toUpperCase());
-            
-            // Trigger Ninja Animation
+
+            // FIX: use the actual detected side instead of random
             if (ninjaRef.current) {
               if (actionType === 'Hit') {
-                ninjaRef.current.playAction(Math.random() > 0.5 ? 'right_hit' : 'left_hit');
+                ninjaRef.current.playAction(data.side === 'left' ? 'left_hit' : 'right_hit');
               } else if (actionType === 'Block') {
                 ninjaRef.current.playAction('block');
               } else if (actionType === 'Idle') {
@@ -174,10 +176,8 @@ const CameraTest = () => {
               }
             }
 
-            // Skip logging and sound for idle
             if (data.action === 'idle') return;
 
-            // Play sound based on action
             if (actionType === 'Hit') playSound('HIT');
             if (actionType === 'Block') playSound('BLOCK');
 
@@ -188,9 +188,9 @@ const CameraTest = () => {
               timestamp: performance.now(),
               timeStr: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' })
             };
-            
+
             setLastAction(newAction);
-            setActionLog(prev => [newAction, ...prev].slice(0, 50)); // Keep last 50
+            setActionLog(prev => [newAction, ...prev].slice(0, 50));
           } else {
             setCurrentState('ACTIVE');
           }
@@ -199,7 +199,7 @@ const CameraTest = () => {
 
       ws.onclose = () => {
         setWsConnected(false);
-        setTimeout(connectWs, 2000); // Reconnect
+        setTimeout(connectWs, 2000);
       };
 
       wsRef.current = ws;
@@ -223,7 +223,6 @@ const CameraTest = () => {
           timestamp: handData.timestamp
         } : null
       };
-      
       wsRef.current.send(JSON.stringify(payload));
     }
   }, [landmarksData, handData]);
@@ -231,22 +230,22 @@ const CameraTest = () => {
   useEffect(() => {
     const setupCamera = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { width: 1280, height: 720, facingMode: 'user' } 
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: 1280, height: 720, facingMode: 'user' }
         });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.onloadedmetadata = () => setIsReady(true);
         }
       } catch (err) {
-        console.error("Camera access error:", err);
+        console.error('Camera access error:', err);
       }
     };
     setupCamera();
   }, []);
 
   const getActionColor = (type) => {
-    switch(type) {
+    switch (type) {
       case 'Hit': return 'text-red-500';
       case 'Block': return 'text-blue-500';
       default: return 'text-white';
@@ -263,8 +262,8 @@ const CameraTest = () => {
         <div className="absolute left-3/4 top-0 w-[1px] h-full bg-red-600/30" />
       </div>
 
-      <Link 
-        to="/menu" 
+      <Link
+        to="/menu"
         onMouseEnter={() => playSound('SELECT')}
         onClick={() => playSound('START')}
         className="absolute top-8 left-8 z-50 flex items-center gap-3 text-white/40 hover:text-white transition-all bg-zinc-900/80 px-6 py-3 rounded-xl border border-white/5 backdrop-blur-md group"
@@ -288,7 +287,7 @@ const CameraTest = () => {
               ref={canvasRef}
               className="absolute inset-0 w-full h-full pointer-events-none"
             />
-            
+
             {/* HUD Overlay */}
             <div className="absolute inset-0 flex flex-col items-center justify-between p-10 pointer-events-none">
               <div className="w-full flex justify-between items-start">
@@ -363,18 +362,19 @@ const CameraTest = () => {
               {/* Bottom Indicators */}
               <div className="w-full max-w-lg grid grid-cols-4 gap-3 bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 shadow-2xl">
                 {['Left-Hit', 'Right-Hit', 'Block', 'Idle'].map((label) => {
-                  const isActive = (label === 'Block' && currentState === 'BLOCK') || 
-                                 (label === 'Left-Hit' && currentState === 'HIT' && lastAction.side === 'left') ||
-                                 (label === 'Right-Hit' && currentState === 'HIT' && lastAction.side === 'right') ||
-                                 (label === 'Idle' && currentState === 'IDLE');
+                  const isActive =
+                    (label === 'Block' && currentState === 'BLOCK') ||
+                    (label === 'Left-Hit' && currentState === 'HIT' && lastAction.side === 'left') ||
+                    (label === 'Right-Hit' && currentState === 'HIT' && lastAction.side === 'right') ||
+                    (label === 'Idle' && currentState === 'IDLE');
                   return (
                     <div key={label} className="flex flex-col items-center gap-2">
                       <span className={`text-[9px] font-black uppercase tracking-widest transition-colors ${isActive ? 'text-white' : 'text-white/20'}`}>{label}</span>
                       <div className={`h-1.5 w-full rounded-full transition-all duration-200 ${
-                        isActive 
-                          ? (label === 'Block' ? 'bg-blue-500 shadow-[0_0_15px_#3b82f6]' 
-                             : label === 'Idle' ? 'bg-green-500 shadow-[0_0_15px_#22c55e]'
-                             : 'bg-red-500 shadow-[0_0_15px_#ef4444]') 
+                        isActive
+                          ? (label === 'Block' ? 'bg-blue-500 shadow-[0_0_15px_#3b82f6]'
+                            : label === 'Idle' ? 'bg-green-500 shadow-[0_0_15px_#22c55e]'
+                            : 'bg-red-500 shadow-[0_0_15px_#ef4444]')
                           : 'bg-white/5'
                       }`} />
                     </div>
@@ -386,7 +386,7 @@ const CameraTest = () => {
 
           {/* 3D Model Viewport */}
           <div className="h-64 relative rounded-3xl overflow-hidden border-2 border-white/10 bg-zinc-950 shadow-2xl">
-            <ThreeCanvas 
+            <ThreeCanvas
               shadows
               flat
               gl={{ antialias: true, alpha: true }}
@@ -395,12 +395,12 @@ const CameraTest = () => {
               <PerspectiveCamera makeDefault position={[0, 1.5, 4]} fov={50} />
               <ambientLight intensity={1} />
               <spotLight position={[5, 5, 5]} angle={0.15} penumbra={1} intensity={2} color="#ff0000" castShadow />
-              
+
               <Suspense fallback={null}>
                 <NinjaModel ref={ninjaRef} position={[0, -1, 0]} scale={1.5} />
                 <Preload all />
               </Suspense>
-              
+
               <ContactShadows opacity={0.6} scale={10} blur={2.5} far={4.5} color="#000000" />
             </ThreeCanvas>
           </div>
@@ -416,7 +416,7 @@ const CameraTest = () => {
             </div>
             <div className="font-mono text-[10px] text-white/30 tracking-tighter">SEC_TYPE: LOG_A</div>
           </div>
-          
+
           <div className="flex-1 overflow-y-auto p-6 space-y-3 relative z-10 custom-scrollbar">
             {actionLog.length === 0 ? (
               <div className="h-full flex flex-col items-center justify-center gap-4 opacity-10">
@@ -425,8 +425,8 @@ const CameraTest = () => {
               </div>
             ) : (
               actionLog.map((log) => (
-                <div 
-                  key={log.id} 
+                <div
+                  key={log.id}
                   className="flex items-center justify-between p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/20 transition-all group animate-in slide-in-from-right duration-300"
                 >
                   <div className="flex flex-col gap-1">
@@ -447,7 +447,7 @@ const CameraTest = () => {
           </div>
         </div>
       </div>
-      
+
       <div className="mt-8 flex items-center gap-8 opacity-20">
         <div className="h-[1px] w-32 bg-gradient-to-r from-transparent to-white" />
         <p className="text-[9px] font-black uppercase tracking-[1em] italic text-white whitespace-nowrap">Neural Combat Interface v0.3.5</p>

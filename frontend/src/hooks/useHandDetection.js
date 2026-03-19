@@ -32,12 +32,19 @@ export const useHandDetection = (videoRef) => {
       if (lastVideoTimeRef.current !== videoRef.current.currentTime) {
         lastVideoTimeRef.current = videoRef.current.currentTime;
         const result = handLandmarker.detectForVideo(videoRef.current, startTimeMs);
+
+        // FIX: always update results, even when empty.
+        // The old code only called setResults when hands were detected, which
+        // meant the last frame's hand data was kept alive and kept getting sent
+        // to the backend after the hands left the frame — causing ghost detections.
         if (result.landmarks && result.landmarks.length > 0) {
           setResults({
             landmarks: result.landmarks,
             handedness: result.handedness,
             timestamp: startTimeMs
           });
+        } else {
+          setResults(null);
         }
       }
     }
