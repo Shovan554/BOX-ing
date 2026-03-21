@@ -28,10 +28,12 @@ async def startup_db_client():
     else:
         print("CRITICAL: Failed to connect to MongoDB Atlas")
 
+# allow_credentials=False so allow_origins=["*"] is valid (browsers reject * + credentials).
+# Auth uses Bearer tokens in headers, not cross-site cookies.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
