@@ -8,9 +8,7 @@ import HealthBar from '../components/HealthBar';
 import MatchEndOverlay from '../components/MatchEndOverlay';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { detectLocalMotion, DEFAULT_BOXING_THRESHOLDS } from '../utils/boxingLocalDetect';
-
-const API = `http://${window.location.hostname}:8000`;
-const WS_BASE = `ws://${window.location.hostname}:8000`;
+import { API_BASE_URL, WS_BASE_URL } from '../config/api';
 
 const MAX_HP = 100;
 const DAMAGE_PER_HIT = 10;
@@ -107,7 +105,7 @@ const MultiplayerArena = () => {
       setRoomReady(true);
       return;
     }
-    fetch(`${API}/room/${roomCode}`)
+    fetch(`${API_BASE_URL}/room/${roomCode}`)
       .then((r) => r.json())
       .then((room) => {
         const users = room.users || [];
@@ -163,7 +161,7 @@ const MultiplayerArena = () => {
     if (!roomReady || !roomCode || !sessionId) return;
 
     const connect = () => {
-      const ws = new WebSocket(`${WS_BASE}/ws/${roomCode}/${sessionId}`);
+      const ws = new WebSocket(`${WS_BASE_URL}/ws/${roomCode}/${sessionId}`);
       ws.onopen = () => {
         setRoomConnected(true);
         if (ws.readyState === WebSocket.OPEN) {
@@ -222,7 +220,7 @@ const MultiplayerArena = () => {
     setWinSaveStatus('loading');
     let cancelled = false;
 
-    fetch(`${API}/multiplayer/record-win`, {
+    fetch(`${API_BASE_URL}/multiplayer/record-win`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     })

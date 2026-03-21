@@ -3,8 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Mail, Lock, User, ArrowRight, Loader2, AlertCircle } from 'lucide-react';
 import { useSoundEffects } from '../hooks/useSoundEffects';
-
-const API_BASE_URL = `http://${window.location.hostname}:8000`;
+import { API_BASE_URL } from '../config/api';
 
 const AuthPage = () => {
   const [isLogin, setIsLogin] = useState(true);

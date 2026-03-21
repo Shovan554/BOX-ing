@@ -3,8 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Loader2, Swords, Target, Zap, Shield } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSoundEffects } from '../hooks/useSoundEffects';
-
-const API_BASE_URL = `http://${window.location.hostname}:8000`;
+import { API_BASE_URL } from '../config/api';
 
 const Scanlines = () => (
   <div className="absolute inset-0 pointer-events-none opacity-[0.03] z-0 overflow-hidden">

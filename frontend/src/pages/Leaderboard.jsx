@@ -2,8 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Trophy, Medal } from 'lucide-react';
 import { motion } from 'framer-motion';
-
-const API_BASE_URL = `http://${window.location.hostname}:8000`;
+import { API_BASE_URL } from '../config/api';
 
 const Leaderboard = () => {
   const [leaders, setLeaders] = useState([]);

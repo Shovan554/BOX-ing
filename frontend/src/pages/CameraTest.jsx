@@ -6,9 +6,7 @@ import NinjaModel from '../components/NinjaModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useHandDetection } from '../hooks/useHandDetection';
 import { detectLocalMotion, DEFAULT_BOXING_THRESHOLDS } from '../utils/boxingLocalDetect';
-
-const API  = `http://${window.location.hostname}:8000`;
-const WS   = `ws://${window.location.hostname}:8000`;
+import { API_BASE_URL, WS_BASE_URL } from '../config/api';
 
 // Pose skeleton connections to draw
 const POSE_CONNECTIONS = [
@@ -91,7 +89,7 @@ const CameraTest = () => {
 
   // Session init
   useEffect(() => {
-    fetch(`${API}/session/start`, {
+    fetch(`${API_BASE_URL}/session/start`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -109,7 +107,7 @@ const CameraTest = () => {
     if (!sessionId) return;
 
     const connect = () => {
-      const ws = new WebSocket(`${WS}/ws/detect/${sessionId}`);
+      const ws = new WebSocket(`${WS_BASE_URL}/ws/detect/${sessionId}`);
 
       ws.onopen  = () => setConnected(true);
       ws.onclose = () => { setConnected(false); setTimeout(connect, 2000); };

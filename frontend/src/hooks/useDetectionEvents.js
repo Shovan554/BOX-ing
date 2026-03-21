@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { WS_BASE_URL } from '../config/api';
 
 export const ACTIONS = {
   IDLE: 'idle',
@@ -9,8 +10,6 @@ export const ACTIONS = {
   DEFEAT: 'defeat',
   BOW: 'bow'
 };
-
-const WS_BASE_URL = `ws://${window.location.hostname}:8000`;
 
 export const useDetectionEvents = (sessionId, isLocked = false) => {
   const [lastEvent, setLastEvent] = useState(null);
