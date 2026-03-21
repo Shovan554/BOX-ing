@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useCallback } from 'react';
 
 const SOUNDS = {
   HIT: 'https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3', // Heavy punch
@@ -10,7 +10,7 @@ const SOUNDS = {
 export const useSoundEffects = () => {
   const audioRefs = useRef({});
 
-  const playSound = (key) => {
+  const playSound = useCallback((key) => {
     if (!SOUNDS[key]) return;
     
     // Create audio object if it doesn't exist
@@ -23,7 +23,7 @@ export const useSoundEffects = () => {
     sound.volume = 1.0;
     
     sound.play().catch(e => console.log("Audio playback blocked by browser until user interaction."));
-  };
+  }, []);
 
   return { playSound };
 };

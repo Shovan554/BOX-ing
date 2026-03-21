@@ -112,7 +112,7 @@ const Multiplayer = () => {
   useEffect(() => {
     if (status === 'connected') {
       const timer = setTimeout(() => {
-        navigate('/pov-test', { 
+        navigate('/multiplayer-arena', { 
           state: { 
             roomCode: matchData.room_code,
             playerName: matchData.player_name,
@@ -345,12 +345,12 @@ const Multiplayer = () => {
             >
               <div className="px-12 py-5 bg-white/5 border border-white/10 rounded-full backdrop-blur-2xl relative group overflow-hidden">
                 <div className="absolute inset-0 bg-green-500/5 animate-pulse" />
-                <p className="text-white/60 font-black text-[11px] uppercase tracking-[0.6em] flex items-center gap-6 relative z-10">
+                <div className="text-white/60 font-black text-[11px] uppercase tracking-[0.6em] flex items-center gap-6 relative z-10">
                   <span className="flex gap-1">
                     {[1,2,3].map(i => <div key={i} className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_rgba(34,197,94,0.8)]" style={{ animationDelay: `${i*0.2}s` }} />)}
                   </span>
                   Link Stable • Initializing Arena {matchData?.room_code}
-                </p>
+                </div>
               </div>
             </motion.div>
           </motion.div>

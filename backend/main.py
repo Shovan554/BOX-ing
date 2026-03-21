@@ -468,8 +468,37 @@ def submit_session(payload: SessionSubmit, current_user=Depends(get_current_user
 @app.get("/leaderboard")
 def leaderboard(limit: int = 10) -> dict:
     limit = max(1, min(limit, 50))
-    leaders = leaderboard_col.find().sort("points", -1).limit(limit)
+    leaders = leaderboard_col.find().sort(
+        [("multiplayer_wins", -1), ("points", -1)]
+    ).limit(limit)
     return {"leaders": [serialize_mongo(doc) for doc in leaders]}
+
+
+@app.post("/multiplayer/record-win")
+def record_multiplayer_win(current_user=Depends(get_current_user_optional)) -> dict:
+    """Increment authenticated user's multiplayer_wins on the leaderboard (MVP)."""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Login required to record multiplayer wins")
+    user_id = current_user["id"]
+    display_name = current_user.get("display_name") or "Player"
+    now = utc_now()
+    doc = leaderboard_col.find_one_and_update(
+        {"user_id": user_id},
+        {
+            "$inc": {"multiplayer_wins": 1},
+            "$set": {
+                "user_id": user_id,
+                "display_name": display_name,
+                "updated_at": now,
+            },
+        },
+        upsert=True,
+        return_document=ReturnDocument.AFTER,
+    )
+    return {
+        "ok": True,
+        "multiplayer_wins": int(doc.get("multiplayer_wins", 1)),
+    }
 
 
 # The WebRTC signaling endpoint is a placeholder for future implementation. It currently just echoes back the received offer details.

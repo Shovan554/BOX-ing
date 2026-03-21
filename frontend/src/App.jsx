@@ -4,10 +4,10 @@ import LandingPage from './pages/LandingPage';
 import MainMenu from './pages/MainMenu';
 import CameraTest from './pages/CameraTest';
 import Multiplayer from './pages/Multiplayer';
+import MultiplayerArena from './pages/MultiplayerArena';
 import CreateRoom from './pages/CreateRoom';
 import Leaderboard from './pages/Leaderboard';
 import Settings from './pages/Settings';
-import PovTest from './pages/PovTest';
 import AuthPage from './pages/AuthPage';
 import Results from './pages/Results';
 import Intro from './components/Intro';
@@ -94,8 +94,8 @@ function App() {
 
       {introFinished && (
         <>
-          {/* Global Controls Overlay - Hidden in Arena (/pov-test) */}
-          {location.pathname !== '/pov-test' && (
+          {/* Global Controls Overlay - Hidden in arena screens */}
+          {location.pathname !== '/camera-test' && location.pathname !== '/multiplayer-arena' && (
             <div className="fixed top-4 right-4 z-[100] flex items-center gap-2">
               {/* Mute Button */}
               <button 
@@ -132,9 +132,9 @@ function App() {
               <Route path="/menu" element={<MainMenu />} />
               <Route path="/camera-test" element={<CameraTest />} />
               <Route path="/multiplayer" element={<Multiplayer />} />
+              <Route path="/multiplayer-arena" element={<MultiplayerArena />} />
               <Route path="/create-room" element={<CreateRoom />} />
               <Route path="/leaderboard" element={<Leaderboard />} />
-              <Route path="/pov-test" element={<PovTest />} />
               <Route path="/results" element={<Results />} />
             </Routes>
           </Suspense>

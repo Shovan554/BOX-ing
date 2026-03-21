@@ -1,457 +1,526 @@
 import React, { useRef, useEffect, useState, Suspense } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Shield, Zap, Wifi, WifiOff, History, Activity } from 'lucide-react';
-import { Canvas as ThreeCanvas } from '@react-three/fiber';
-import { PerspectiveCamera, Preload, ContactShadows } from '@react-three/drei';
+import { Canvas } from '@react-three/fiber';
+import { PerspectiveCamera, ContactShadows, Preload } from '@react-three/drei';
 import NinjaModel from '../components/NinjaModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useHandDetection } from '../hooks/useHandDetection';
-import { useSoundEffects } from '../hooks/useSoundEffects';
+import { detectLocalMotion, DEFAULT_BOXING_THRESHOLDS } from '../utils/boxingLocalDetect';
 
-const API_BASE_URL = `http://${window.location.hostname}:8000`;
-const WS_BASE_URL = `ws://${window.location.hostname}:8000`;
+const API  = `http://${window.location.hostname}:8000`;
+const WS   = `ws://${window.location.hostname}:8000`;
+
+// Pose skeleton connections to draw
+const POSE_CONNECTIONS = [
+  [11,12],[11,13],[13,15],[12,14],[14,16],
+  [11,23],[12,24],[23,24],
+  [23,25],[24,26],[25,27],[26,28],
+];
+
+// Hand connections
+const HAND_CONNECTIONS = [
+  [0,1],[1,2],[2,3],[3,4],
+  [0,5],[5,6],[6,7],[7,8],
+  [5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],
+  [13,17],[17,18],[18,19],[19,20],[0,17],
+];
+
+const MOTION_KEYS = ['idle', 'right_hit', 'left_hit', 'block'];
+
+const getLabel = (value) => {
+  if (!value) return 'Unknown';
+  return value.replaceAll('_', ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+};
+
+const getHandState = (hand, fistThreshold = 3) => {
+  if (!hand || hand.length < 21) return 'unknown';
+  const fingerPairs = [[8, 6], [12, 10], [16, 14], [20, 18]];
+  let curled = 0;
+  fingerPairs.forEach(([tip, pip]) => {
+    if (hand[tip]?.y > hand[pip]?.y) curled += 1;
+  });
+  if (curled >= fistThreshold) return 'clenched';
+  if (curled <= 1) return 'opened';
+  return 'partial';
+};
 
 const CameraTest = () => {
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const ninjaRef = useRef(null);
-  const landmarksData = usePoseDetection(videoRef);
+  const videoRef    = useRef(null);
+  const canvasRef   = useRef(null);
+  const ninjaRef    = useRef(null);
+  const wsRef       = useRef(null);
+  const lockRef     = useRef(false);   // animation input lock
+
+  const poseData = usePoseDetection(videoRef);
   const handData = useHandDetection(videoRef);
-  const { playSound } = useSoundEffects();
-  const [currentState, setCurrentState] = useState('STAND BY');
-  const [handStatus, setHandStatus] = useState({ left: { detected: false, fist: false }, right: { detected: false, fist: false } });
-  const [lastAction, setLastAction] = useState({ type: 'None', side: '', timestamp: 0 });
-  const [actionLog, setActionLog] = useState([]);
-  const [isReady, setIsReady] = useState(false);
-  const [wsConnected, setWsConnected] = useState(false);
-  const [sessionId, setSessionId] = useState(null);
-  const wsRef = useRef(null);
-  const logEndRef = useRef(null);
 
-  // Draw landmarks on canvas
+  const [ready,      setReady]      = useState(false);   // camera ready
+  const [connected,  setConnected]  = useState(false);   // WS connected
+  const [sessionId,  setSessionId]  = useState(null);
+  const [log,        setLog]        = useState([]);       // action log entries
+  const [lastAction, setLastAction] = useState(null);    // { action, side, ts }
+  const [motionState, setMotionState] = useState('idle');
+  const [leftHandState, setLeftHandState] = useState('unknown');
+  const [rightHandState, setRightHandState] = useState('unknown');
+  const [thresholds, setThresholds] = useState(() => ({
+    ...DEFAULT_BOXING_THRESHOLDS,
+    fistThreshold: 3,
+  }));
+  const localDetectorRefs = {
+    leftWristHist: useRef([]),
+    rightWristHist: useRef([]),
+    leftExtendHist: useRef([]),
+    rightExtendHist: useRef([]),
+    blockFrames: useRef(0),
+  };
+  const localAnimCooldownRef = useRef(0);
+  const lastLocalMotionRef = useRef('idle');
+  const lastLocalLogRef = useRef(0);
+
+  // Camera setup
   useEffect(() => {
-    if (!canvasRef.current || !videoRef.current) return;
-    const ctx = canvasRef.current.getContext('2d');
-    const video = videoRef.current;
-
-    canvasRef.current.width = video.clientWidth;
-    canvasRef.current.height = video.clientHeight;
-
-    ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-
-    const W = canvasRef.current.width;
-    const H = canvasRef.current.height;
-
-    // Coords are normalised 0-1; video is CSS mirrored so we mirror X here too
-    const sx = (x) => W - x * W;
-    const sy = (y) => y * H;
-
-    const drawPoint = (x, y, color = 'red', size = 3) => {
-      ctx.beginPath();
-      ctx.arc(sx(x), sy(y), size, 0, 2 * Math.PI);
-      ctx.fillStyle = color;
-      ctx.fill();
-    };
-
-    const drawLine = (p1, p2, color = 'white', width = 1) => {
-      ctx.beginPath();
-      ctx.moveTo(sx(p1.x), sy(p1.y));
-      ctx.lineTo(sx(p2.x), sy(p2.y));
-      ctx.strokeStyle = color;
-      ctx.lineWidth = width;
-      ctx.stroke();
-    };
-
-    // Draw Pose Landmarks
-    if (landmarksData?.points) {
-      const connections = [
-        [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
-        [11, 23], [12, 24], [23, 24],
-        [23, 25], [24, 26], [25, 27], [26, 28],
-        [27, 29], [28, 30], [29, 31], [30, 32], [27, 31], [28, 32]
-      ];
-
-      connections.forEach(([i, j]) => {
-        const p1 = landmarksData.points[i];
-        const p2 = landmarksData.points[j];
-        if (p1 && p2 && p1.visibility > 0.5 && p2.visibility > 0.5) {
-          drawLine(p1, p2, 'rgba(255,255,255,0.3)', 2);
+    navigator.mediaDevices.getUserMedia({ video: { width:1280, height:720, facingMode:'user' } })
+      .then(stream => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => setReady(true);
         }
       });
-
-      landmarksData.points.forEach((pt, i) => {
-        if (pt.visibility > 0.5) {
-          let color = 'rgba(255,255,255,0.5)';
-          if (i === 0) color = 'red';
-          if (i === 15 || i === 16) color = '#00f2ff'; // Wrists
-          drawPoint(pt.x, pt.y, color, i === 0 ? 4 : 2);
-        }
-      });
-    }
-
-    // Draw Hand Landmarks
-    // FIX: handle both camelCase (MediaPipe JS) and snake_case gracefully
-    if (handData?.landmarks) {
-      handData.landmarks.forEach((hand, handIdx) => {
-        const h = handData.handedness[handIdx]?.[0] ?? {};
-        const label = h.categoryName ?? h.category_name ?? h.label ?? '';
-        const isLeft = label === 'Left';
-        const color = isLeft ? '#ff0055' : '#00ff55';
-
-        const handConnections = [
-          [0,1],[1,2],[2,3],[3,4],
-          [0,5],[5,6],[6,7],[7,8],
-          [5,9],[9,10],[10,11],[11,12],
-          [9,13],[13,14],[14,15],[15,16],
-          [13,17],[17,18],[18,19],[19,20],[0,17]
-        ];
-
-        handConnections.forEach(([i, j]) => {
-          drawLine(hand[i], hand[j], color, 1.5);
-        });
-
-        hand.forEach(pt => drawPoint(pt.x, pt.y, color, 2));
-      });
-    }
-  }, [landmarksData, handData]);
-
-  // Auto-scroll log
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [actionLog]);
-
-  // Initialize Session
-  useEffect(() => {
-    const startSession = async () => {
-      try {
-        const token = localStorage.getItem('access_token');
-        const headers = { 'Content-Type': 'application/json' };
-        if (token) headers['Authorization'] = `Bearer ${token}`;
-
-        const response = await fetch(`${API_BASE_URL}/session/start`, {
-          method: 'POST',
-          headers
-        });
-        const data = await response.json();
-        setSessionId(data.id || data.session_id);
-      } catch (err) {
-        console.error('Failed to start session:', err);
-      }
-    };
-    startSession();
   }, []);
 
-  // Handle WebSocket Connection
+  // Session init
+  useEffect(() => {
+    fetch(`${API}/session/start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(localStorage.getItem('access_token')
+          ? { Authorization: `Bearer ${localStorage.getItem('access_token')}` }
+          : {}),
+      },
+    })
+    .then(r => r.json())
+    .then(d => setSessionId(d.id ?? d.session_id));
+  }, []);
+
+  // WebSocket
   useEffect(() => {
     if (!sessionId) return;
 
-    const connectWs = () => {
-      const ws = new WebSocket(`${WS_BASE_URL}/ws/detect/${sessionId}`);
+    const connect = () => {
+      const ws = new WebSocket(`${WS}/ws/detect/${sessionId}`);
 
-      ws.onopen = () => {
-        console.log('Connected to detection backend');
-        setWsConnected(true);
-      };
+      ws.onopen  = () => setConnected(true);
+      ws.onclose = () => { setConnected(false); setTimeout(connect, 2000); };
 
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
+      ws.onmessage = (e) => {
+        const d = JSON.parse(e.data);
+        if (!d.action || d.action === 'none') return;
+        // Don't let server idle overwrite local pose detection (causes stuck Idle / wrong UI).
+        if (d.action === 'idle') return;
+        if (lockRef.current) return;
 
-        if (data.hand_status) {
-          setHandStatus(data.hand_status);
-        }
-
-        if (data.action) {
-          if (data.action !== 'none') {
-            const actionType = data.action.charAt(0).toUpperCase() + data.action.slice(1);
-            setCurrentState(actionType === 'Idle' ? 'IDLE' : actionType.toUpperCase());
-
-            // FIX: use the actual detected side instead of random
-            if (ninjaRef.current) {
-              if (actionType === 'Hit') {
-                ninjaRef.current.playAction(data.side === 'left' ? 'left_hit' : 'right_hit');
-              } else if (actionType === 'Block') {
-                ninjaRef.current.playAction('block');
-              } else if (actionType === 'Idle') {
-                ninjaRef.current.playAction('idle');
-              }
-            }
-
-            if (data.action === 'idle') return;
-
-            if (actionType === 'Hit') playSound('HIT');
-            if (actionType === 'Block') playSound('BLOCK');
-
-            const newAction = {
-              id: Date.now(),
-              type: actionType,
-              side: data.side,
-              timestamp: performance.now(),
-              timeStr: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' })
-            };
-
-            setLastAction(newAction);
-            setActionLog(prev => [newAction, ...prev].slice(0, 50));
-          } else {
-            setCurrentState('ACTIVE');
+        // Play ninja animation
+        if (ninjaRef.current) {
+          if (d.action === 'hit') {
+            ninjaRef.current.playAction(d.side === 'left' ? 'left_hit' : 'right_hit');
+          } else if (d.action === 'block') {
+            ninjaRef.current.playAction('block');
           }
         }
-      };
 
-      ws.onclose = () => {
-        setWsConnected(false);
-        setTimeout(connectWs, 2000);
+        // Lock input for 600ms while animation plays
+        lockRef.current = true;
+        setTimeout(() => { lockRef.current = false; }, 600);
+
+        // Update log
+        const motionKey = d.action === 'hit'
+          ? `${d.side === 'left' ? 'left' : 'right'}_hit`
+          : 'block';
+
+        const entry = {
+          id:     Date.now(),
+          action: d.action,
+          side:   d.side,
+          label:  d.action === 'hit'
+                    ? `${d.side.toUpperCase()} HIT`
+                    : 'BLOCK',
+          time:   new Date().toLocaleTimeString([], { hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit' }),
+        };
+        setMotionState(motionKey);
+        setLastAction({ ...entry, ts: performance.now() });
+        setLog(prev => [entry, ...prev].slice(0, 50));
       };
 
       wsRef.current = ws;
     };
 
-    connectWs();
-    return () => {
-      if (wsRef.current) wsRef.current.close();
-    };
+    connect();
+    return () => wsRef.current?.close();
   }, [sessionId]);
 
-  // Send landmarks to backend
   useEffect(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN && landmarksData) {
-      const payload = {
-        landmarks: landmarksData.points,
-        timestamp: landmarksData.timestamp,
-        hand_data: handData ? {
-          landmarks: handData.landmarks,
-          handedness: handData.handedness,
-          timestamp: handData.timestamp
-        } : null
+    if (!poseData?.points) {
+      setMotionState('idle');
+      return;
+    }
+    const nextMotion = detectLocalMotion(poseData.points, thresholds, localDetectorRefs);
+    setMotionState(nextMotion);
+    const now = performance.now();
+    const motionChanged = nextMotion !== lastLocalMotionRef.current;
+    lastLocalMotionRef.current = nextMotion;
+    if (ninjaRef.current && nextMotion !== 'idle' && motionChanged && now >= localAnimCooldownRef.current) {
+      ninjaRef.current.playAction(nextMotion);
+      localAnimCooldownRef.current = now + 450;
+    }
+    if (nextMotion !== 'idle' && motionChanged && now - lastLocalLogRef.current > 450) {
+      lastLocalLogRef.current = now;
+      const isBlock = nextMotion === 'block';
+      const side = nextMotion === 'left_hit' ? 'left' : nextMotion === 'right_hit' ? 'right' : '';
+      const entry = {
+        id: Date.now(),
+        action: isBlock ? 'block' : 'hit',
+        side,
+        label: isBlock ? 'BLOCK' : `${side.toUpperCase()} HIT`,
+        time: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        source: 'local',
       };
-      wsRef.current.send(JSON.stringify(payload));
+      setLastAction({ ...entry, ts: now });
+      setLog(prev => {
+        const head = prev[0];
+        if (head && head.label === entry.label && entry.id - head.id < 500) return prev;
+        return [entry, ...prev].slice(0, 50);
+      });
     }
-  }, [landmarksData, handData]);
+  }, [poseData, thresholds]);
 
   useEffect(() => {
-    const setupCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 1280, height: 720, facingMode: 'user' }
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          videoRef.current.onloadedmetadata = () => setIsReady(true);
-        }
-      } catch (err) {
-        console.error('Camera access error:', err);
-      }
-    };
-    setupCamera();
-  }, []);
-
-  const getActionColor = (type) => {
-    switch (type) {
-      case 'Hit': return 'text-red-500';
-      case 'Block': return 'text-blue-500';
-      default: return 'text-white';
+    if (!handData?.landmarks || !handData?.handedness) {
+      setLeftHandState('unknown');
+      setRightHandState('unknown');
+      return;
     }
-  };
+
+    let nextLeft = 'unknown';
+    let nextRight = 'unknown';
+
+    handData.landmarks.forEach((hand, hi) => {
+      const h = handData.handedness[hi]?.[0] ?? {};
+      const label = h.categoryName ?? h.category_name ?? h.label ?? '';
+      const state = getHandState(hand, thresholds.fistThreshold);
+      // Video is mirrored, so MediaPipe Left maps to user right.
+      if (label === 'Left') nextRight = state;
+      if (label === 'Right') nextLeft = state;
+    });
+
+    setLeftHandState(nextLeft);
+    setRightHandState(nextRight);
+  }, [handData, thresholds.fistThreshold]);
+
+  // Send landmarks every frame
+  useEffect(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (!poseData) return;
+
+    wsRef.current.send(JSON.stringify({
+      landmarks:  poseData.points,
+      timestamp:  poseData.timestamp,
+      hand_data:  handData ? {
+        landmarks:  handData.landmarks,
+        handedness: handData.handedness,
+        timestamp:  handData.timestamp,
+      } : null,
+    }));
+  }, [poseData, handData]);
+
+  // Canvas skeleton draw
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const video  = videoRef.current;
+    if (!canvas || !video) return;
+
+    const ctx = canvas.getContext('2d');
+    canvas.width  = video.clientWidth;
+    canvas.height = video.clientHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const W = canvas.width;
+    const H = canvas.height;
+
+    // Pose skeleton — mirror X because video is CSS-mirrored
+    if (poseData?.points) {
+      const pts = poseData.points;
+
+      // Draw connections
+      ctx.strokeStyle = 'rgba(0,242,255,0.7)';
+      ctx.lineWidth   = 2;
+      POSE_CONNECTIONS.forEach(([i,j]) => {
+        const a = pts[i], b = pts[j];
+        if (!a || !b || a.visibility < 0.5 || b.visibility < 0.5) return;
+        ctx.beginPath();
+        ctx.moveTo(W - a.x*W, a.y*H);
+        ctx.lineTo(W - b.x*W, b.y*H);
+        ctx.stroke();
+      });
+
+      // Draw points
+      pts.forEach((p, i) => {
+        if (!p || p.visibility < 0.5) return;
+        const x = W - p.x*W;
+        const y = p.y*H;
+        ctx.beginPath();
+        ctx.arc(x, y, i === 0 ? 5 : 3, 0, Math.PI*2);
+        ctx.fillStyle = i === 0 ? '#ff5050'
+                      : (i === 15 || i === 16) ? '#00f2ff'
+                      : 'rgba(255,255,255,0.7)';
+        ctx.fill();
+      });
+    }
+
+    // Hand skeleton
+    if (handData?.landmarks) {
+      handData.landmarks.forEach((hand, hi) => {
+        const h    = handData.handedness[hi]?.[0] ?? {};
+        const label = h.categoryName ?? h.category_name ?? h.label ?? '';
+        // Mirror: MediaPipe "Left" → user's right hand (because video is mirrored)
+        const color = label === 'Left' ? '#00ff55' : '#ff0055';
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = 1.5;
+        HAND_CONNECTIONS.forEach(([i,j]) => {
+          const a = hand[i], b = hand[j];
+          if (!a || !b) return;
+          ctx.beginPath();
+          ctx.moveTo(W - a.x*W, a.y*H);
+          ctx.lineTo(W - b.x*W, b.y*H);
+          ctx.stroke();
+        });
+
+        ctx.fillStyle = color;
+        hand.forEach(p => {
+          if (!p) return;
+          ctx.beginPath();
+          ctx.arc(W - p.x*W, p.y*H, 2, 0, Math.PI*2);
+          ctx.fill();
+        });
+      });
+    }
+  });
 
   return (
-    <div className="w-full h-full relative bg-black flex flex-col items-center justify-center p-8 overflow-hidden">
-      {/* HUD Background Decoration */}
-      <div className="absolute inset-0 z-0 opacity-20 pointer-events-none">
-        <div className="absolute top-1/4 left-0 w-full h-[1px] bg-red-600/30" />
-        <div className="absolute top-3/4 left-0 w-full h-[1px] bg-red-600/30" />
-        <div className="absolute left-1/4 top-0 w-[1px] h-full bg-red-600/30" />
-        <div className="absolute left-3/4 top-0 w-[1px] h-full bg-red-600/30" />
+    <div style={{ width:'100%', height:'100vh', background:'radial-gradient(circle at 20% 10%, #101d2a 0%, #070b12 35%, #000 100%)', display:'flex', flexDirection:'column', position:'relative' }}>
+      <div style={{ position:'absolute', inset:0, pointerEvents:'none', opacity:0.08, background:'linear-gradient(transparent 50%, rgba(255,255,255,0.15) 50%)', backgroundSize:'100% 4px' }} />
+
+      {/* Top bar */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 24px', borderBottom:'1px solid rgba(255,255,255,0.1)' }}>
+        <Link to="/menu" style={{ color:'rgba(255,255,255,0.5)', textDecoration:'none', fontSize:13, letterSpacing:'0.15em' }}>
+          ← BACK
+        </Link>
+        <span style={{ fontSize:11, letterSpacing:'0.2em', color: connected ? '#22c55e' : '#ef4444' }}>
+          {connected ? '● DETECTION ONLINE' : '● CONNECTING...'}
+        </span>
       </div>
 
-      <Link
-        to="/menu"
-        onMouseEnter={() => playSound('SELECT')}
-        onClick={() => playSound('START')}
-        className="absolute top-8 left-8 z-50 flex items-center gap-3 text-white/40 hover:text-white transition-all bg-zinc-900/80 px-6 py-3 rounded-xl border border-white/5 backdrop-blur-md group"
-      >
-        <ArrowLeft size={18} className="group-hover:-translate-x-1 transition-transform" />
-        <span className="font-black tracking-[0.2em] text-xs uppercase">Abort Mission</span>
-      </Link>
+      <div style={{ display:'grid', gridTemplateColumns:'1.6fr 1fr', gap:12, padding:'12px 16px 0' }}>
+        <div style={{ border:'1px solid rgba(255,255,255,0.12)', borderRadius:12, padding:'10px 12px', background:'rgba(255,255,255,0.03)' }}>
+          <div style={{ fontSize:10, letterSpacing:'0.16em', color:'rgba(255,255,255,0.45)', marginBottom:10 }}>
+            MOTION STATUS
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4, minmax(0, 1fr))', gap:8 }}>
+            {MOTION_KEYS.map((key) => {
+              const active = motionState === key;
+              return (
+                <div key={key} style={{ border:'1px solid rgba(255,255,255,0.12)', borderRadius:10, padding:'8px 10px', background: active ? 'rgba(34,197,94,0.16)' : 'rgba(0,0,0,0.25)' }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                    <span style={{ width:8, height:8, borderRadius:'50%', background:active ? '#22c55e' : 'rgba(255,255,255,0.25)', boxShadow:active ? '0 0 14px #22c55e' : 'none' }} />
+                    <span style={{ fontSize:11, letterSpacing:'0.08em', color: active ? '#dcfce7' : 'rgba(255,255,255,0.65)' }}>
+                      {getLabel(key)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
-      <div className="flex flex-col lg:flex-row gap-8 w-full max-w-7xl h-[80vh] z-10">
-        {/* Main Viewport */}
-        <div className="flex-1 flex flex-col gap-8">
-          <div className="flex-1 relative rounded-3xl overflow-hidden border-2 border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.5)] bg-zinc-950 group">
+        <div style={{ border:'1px solid rgba(255,255,255,0.12)', borderRadius:12, padding:'10px 12px', background:'rgba(255,255,255,0.03)' }}>
+          <div style={{ fontSize:10, letterSpacing:'0.16em', color:'rgba(255,255,255,0.45)', marginBottom:10 }}>
+            HAND STATE
+          </div>
+          <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+            {[['Left Hand', leftHandState], ['Right Hand', rightHandState]].map(([title, state]) => {
+              const active = state === 'opened' || state === 'clenched' || state === 'partial';
+              const color = state === 'clenched' ? '#ef4444' : state === 'opened' ? '#22c55e' : state === 'partial' ? '#eab308' : '#94a3b8';
+              return (
+                <div key={title} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', border:'1px solid rgba(255,255,255,0.12)', borderRadius:10, padding:'8px 10px', background:'rgba(0,0,0,0.2)' }}>
+                  <span style={{ fontSize:11, letterSpacing:'0.08em', color:'rgba(255,255,255,0.75)' }}>{title}</span>
+                  <span style={{ fontSize:11, letterSpacing:'0.08em', color:active ? color : 'rgba(255,255,255,0.5)', textTransform:'uppercase' }}>
+                    {state}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ margin:'8px 16px 0', display:'flex', alignItems:'center', justifyContent:'space-between', border:'1px solid rgba(255,255,255,0.1)', borderRadius:10, padding:'8px 12px', background:'rgba(0,0,0,0.35)' }}>
+        <span style={{ fontSize:10, letterSpacing:'0.18em', color:'rgba(255,255,255,0.45)' }}>ARENA FEED</span>
+        <span style={{ fontSize:13, letterSpacing:'0.1em', fontWeight:700, color: motionState === 'block' ? '#60a5fa' : motionState === 'idle' ? '#86efac' : '#f87171' }}>
+          {getLabel(motionState)}
+        </span>
+      </div>
+
+      <div style={{ margin:'10px 16px 0', border:'1px solid rgba(255,255,255,0.12)', borderRadius:12, background:'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))', padding:'10px 12px', boxShadow:'0 0 30px rgba(34,197,94,0.08)' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
+          <div style={{ fontSize:10, letterSpacing:'0.16em', color:'rgba(255,255,255,0.45)' }}>CALIBRATION</div>
+          <button
+            type="button"
+            onClick={() => setThresholds({ ...DEFAULT_BOXING_THRESHOLDS, fistThreshold: 3 })}
+            style={{ fontSize:10, letterSpacing:'0.12em', color:'#cbd5e1', background:'transparent', border:'1px solid rgba(255,255,255,0.2)', borderRadius:8, padding:'4px 8px', cursor:'pointer' }}
+          >
+            RESET
+          </button>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, minmax(0, 1fr))', gap:10 }}>
+          {[
+            ['hitElbowAngle', 'Hit Elbow', 120, 175, 1],
+            ['hitExtendFloor', 'Hit Extend', 0.8, 1.6, 0.01],
+            ['hitDelta', 'Hit Delta', 0.1, 0.7, 0.01],
+            ['hitMinSpeed', 'Hit Speed', 0.005, 0.12, 0.005],
+            ['hitShoulderFwd', 'Shoulder Z', -40, 10, 1],
+            ['hitShoulderFwdRelax', 'Z relax', 5, 45, 1],
+            ['hitStrikeNoseGap', 'Strike nose', 0.008, 0.06, 0.002],
+            ['blockWristToNose', 'Block Nose', 0.08, 0.3, 0.01],
+            ['blockConfirmFrames', 'Block Frames', 1, 8, 1],
+            ['forwardPunchDepthMin', 'Fwd punch Z', 8, 45, 1],
+            ['blockMaxExtend', 'Block max ext', 1.05, 1.45, 0.01],
+            ['fistThreshold', 'Fist Curl', 2, 4, 1],
+          ].map(([key, label, min, max, step]) => (
+            <label key={key} style={{ display:'flex', flexDirection:'column', gap:4 }}>
+              <span style={{ fontSize:10, color:'rgba(255,255,255,0.65)', letterSpacing:'0.06em' }}>
+                {label}: {thresholds[key]}
+              </span>
+              <input
+                type="range"
+                min={min}
+                max={max}
+                step={step}
+                value={key === 'blockMaxExtend' ? (thresholds.blockMaxExtend ?? 1.45) : thresholds[key]}
+                onChange={(e) => {
+                  const intKeys = ['fistThreshold', 'blockConfirmFrames', 'hitElbowAngle', 'hitShoulderFwd', 'hitShoulderFwdRelax', 'forwardPunchDepthMin'];
+                  let value = intKeys.includes(key)
+                    ? parseInt(e.target.value, 10)
+                    : parseFloat(e.target.value);
+                  if (key === 'blockMaxExtend' && value >= 1.42) value = null;
+                  setThresholds(prev => ({ ...prev, [key]: value }));
+                }}
+              />
+            </label>
+          ))}
+        </div>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:'12px 24px', marginTop:12, fontSize:11, color:'rgba(255,255,255,0.7)', letterSpacing:'0.06em' }}>
+          <label style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer' }}>
+            <input
+              type="checkbox"
+              checked={thresholds.swapMirrorArms}
+              onChange={(e) => setThresholds(prev => ({ ...prev, swapMirrorArms: e.target.checked }))}
+            />
+            Swap Left/Right hit labels (selfie mirror)
+          </label>
+          <label style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer' }}>
+            <input
+              type="checkbox"
+              checked={thresholds.blockSuppressForwardPunch !== false}
+              onChange={(e) => setThresholds(prev => ({ ...prev, blockSuppressForwardPunch: e.target.checked }))}
+            />
+            Block: don’t steal face-on straight punches (recommended)
+          </label>
+        </div>
+        <div style={{ marginTop:8, fontSize:10, color:'rgba(255,255,255,0.45)', lineHeight:1.45 }}>
+          <strong style={{ color:'rgba(255,255,255,0.55)' }}>Block max ext</strong> at the right = off (classic block). Lower it only if jabs still read as BLOCK.
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div style={{ flex:1, display:'flex', gap:16, padding:16, overflow:'hidden' }}>
+
+        {/* Left column: camera + log */}
+        <div style={{ display:'flex', flexDirection:'column', gap:12, width:'45%' }}>
+
+          {/* Camera feed */}
+          <div style={{ position:'relative', borderRadius:16, overflow:'hidden', border:'1px solid rgba(255,255,255,0.1)', aspectRatio:'16/9', background:'#111' }}>
             <video
               ref={videoRef}
-              className="w-full h-full object-cover scale-x-[-1] opacity-80"
-              autoPlay
-              playsInline
-              muted
+              autoPlay playsInline muted
+              style={{ width:'100%', height:'100%', objectFit:'cover', transform:'scaleX(-1)' }}
             />
             <canvas
               ref={canvasRef}
-              className="absolute inset-0 w-full h-full pointer-events-none"
+              style={{ position:'absolute', inset:0, width:'100%', height:'100%', pointerEvents:'none' }}
             />
-
-            {/* HUD Overlay */}
-            <div className="absolute inset-0 flex flex-col items-center justify-between p-10 pointer-events-none">
-              <div className="w-full flex justify-between items-start">
-                <div className="flex flex-col gap-4">
-                  <div className="bg-black/60 backdrop-blur-xl p-5 rounded-2xl border-l-4 border-green-500 flex flex-col gap-1 shadow-xl">
-                    <div className="flex items-center gap-2 text-white/40 mb-1">
-                      <Activity size={12} className="animate-pulse" />
-                      <span className="text-[10px] font-black tracking-widest uppercase">Bio-Link</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <div className={`w-2 h-2 rounded-full ${isReady ? 'bg-green-500 shadow-[0_0_10px_#22c55e]' : 'bg-red-500 animate-pulse'}`} />
-                      <span className="font-black text-sm text-white tracking-tighter">{isReady ? 'NEURAL LINK ACTIVE' : 'CONNECTING...'}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-black/60 backdrop-blur-xl p-5 rounded-2xl border-r-4 border-red-500 flex flex-col items-end gap-1 shadow-xl">
-                  <div className="flex items-center gap-2 text-white/40 mb-1">
-                    <span className="text-[10px] font-black tracking-widest uppercase">Remote Engine</span>
-                    <Wifi size={12} className={wsConnected ? 'text-green-500' : 'text-red-500'} />
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="font-black text-sm text-white tracking-tighter uppercase">{wsConnected ? 'Python Core Online' : 'Linking...'}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Hand Status HUD */}
-              <div className="w-full flex justify-between px-4">
-                <div className={`flex flex-col gap-1 transition-all duration-300 ${handStatus?.left?.detected ? 'opacity-100' : 'opacity-30'}`}>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${handStatus?.left?.detected ? (handStatus?.left?.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Left Peripheral</span>
-                  </div>
-                  <div className="text-xl font-black italic text-white tracking-tighter uppercase">
-                    {handStatus?.left?.detected ? (handStatus?.left?.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
-                  </div>
-                </div>
-
-                <div className={`flex flex-col items-end gap-1 transition-all duration-300 ${handStatus?.right?.detected ? 'opacity-100' : 'opacity-30'}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-white/60">Right Peripheral</span>
-                    <div className={`w-2 h-2 rounded-full ${handStatus?.right?.detected ? (handStatus?.right?.fist ? 'bg-red-500 shadow-[0_0_10px_#ef4444]' : 'bg-green-500') : 'bg-zinc-800'}`} />
-                  </div>
-                  <div className="text-xl font-black italic text-white tracking-tighter uppercase">
-                    {handStatus?.right?.detected ? (handStatus?.right?.fist ? 'Fist Clenched' : 'Hand Open') : 'Searching...'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Flash Feedback */}
-              <div className="flex flex-col items-center gap-4 py-12">
-                {performance.now() - lastAction.timestamp < 800 ? (
-                  <div className="flex flex-col items-center animate-in zoom-in duration-150">
-                    <div className={`text-8xl font-black italic tracking-tighter ${getActionColor(lastAction.type)} drop-shadow-[0_0_30px_rgba(255,255,255,0.2)] uppercase`}>
-                      {lastAction.side} {lastAction.type}
-                    </div>
-                    <div className="h-1 w-full bg-current mt-2 animate-out fade-out duration-700" />
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center">
-                    <div className="text-white/5 text-2xl font-black italic uppercase tracking-[0.8em] select-none mb-2">
-                      System Status
-                    </div>
-                    <div className={`text-4xl font-black italic uppercase tracking-[0.4em] ${currentState === 'IDLE' ? 'text-white/20' : 'text-green-500/50'}`}>
-                      {currentState}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Bottom Indicators */}
-              <div className="w-full max-w-lg grid grid-cols-4 gap-3 bg-black/40 backdrop-blur-md p-4 rounded-2xl border border-white/5 shadow-2xl">
-                {['Left-Hit', 'Right-Hit', 'Block', 'Idle'].map((label) => {
-                  const isActive =
-                    (label === 'Block' && currentState === 'BLOCK') ||
-                    (label === 'Left-Hit' && currentState === 'HIT' && lastAction.side === 'left') ||
-                    (label === 'Right-Hit' && currentState === 'HIT' && lastAction.side === 'right') ||
-                    (label === 'Idle' && currentState === 'IDLE');
-                  return (
-                    <div key={label} className="flex flex-col items-center gap-2">
-                      <span className={`text-[9px] font-black uppercase tracking-widest transition-colors ${isActive ? 'text-white' : 'text-white/20'}`}>{label}</span>
-                      <div className={`h-1.5 w-full rounded-full transition-all duration-200 ${
-                        isActive
-                          ? (label === 'Block' ? 'bg-blue-500 shadow-[0_0_15px_#3b82f6]'
-                            : label === 'Idle' ? 'bg-green-500 shadow-[0_0_15px_#22c55e]'
-                            : 'bg-red-500 shadow-[0_0_15px_#ef4444]')
-                          : 'bg-white/5'
-                      }`} />
-                    </div>
-                  );
-                })}
-              </div>
+            {/* Ready indicator */}
+            <div style={{ position:'absolute', top:10, left:10, background:'rgba(0,0,0,0.7)', padding:'4px 10px', borderRadius:8, fontSize:11, letterSpacing:'0.15em', color: ready ? '#22c55e' : '#888' }}>
+              {ready ? '● VISION ACTIVE' : '● INITIALISING...'}
             </div>
           </div>
 
-          {/* 3D Model Viewport */}
-          <div className="h-64 relative rounded-3xl overflow-hidden border-2 border-white/10 bg-zinc-950 shadow-2xl">
-            <ThreeCanvas
-              shadows
-              flat
-              gl={{ antialias: true, alpha: true }}
-              dpr={[1, 1.5]}
-            >
-              <PerspectiveCamera makeDefault position={[0, 1.5, 4]} fov={50} />
-              <ambientLight intensity={1} />
-              <spotLight position={[5, 5, 5]} angle={0.15} penumbra={1} intensity={2} color="#ff0000" castShadow />
-
-              <Suspense fallback={null}>
-                <NinjaModel ref={ninjaRef} position={[0, -1, 0]} scale={1.5} />
-                <Preload all />
-              </Suspense>
-
-              <ContactShadows opacity={0.6} scale={10} blur={2.5} far={4.5} color="#000000" />
-            </ThreeCanvas>
-          </div>
-        </div>
-
-        {/* Action Log Sidebar */}
-        <div className="w-full lg:w-96 flex flex-col bg-zinc-950 rounded-3xl border border-white/10 overflow-hidden shadow-2xl relative">
-          <div className="absolute inset-0 bg-red-900/5 pointer-events-none" />
-          <div className="p-8 border-b border-white/5 flex items-center justify-between relative z-10">
-            <div className="flex items-center gap-3">
-              <div className="w-2 h-2 bg-red-600 animate-pulse rounded-full" />
-              <h2 className="font-black italic text-sm tracking-[0.3em] uppercase text-white">Action Feed</h2>
+          {/* Action log */}
+          <div style={{ flex:1, background:'rgba(255,255,255,0.03)', border:'1px solid rgba(255,255,255,0.08)', borderRadius:16, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+            <div style={{ padding:'12px 16px', borderBottom:'1px solid rgba(255,255,255,0.06)', fontSize:11, letterSpacing:'0.2em', color:'rgba(255,255,255,0.4)' }}>
+              ACTION LOG
             </div>
-            <div className="font-mono text-[10px] text-white/30 tracking-tighter">SEC_TYPE: LOG_A</div>
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-6 space-y-3 relative z-10 custom-scrollbar">
-            {actionLog.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center gap-4 opacity-10">
-                <History size={40} />
-                <span className="text-xs font-black uppercase tracking-[0.4em]">Listening...</span>
-              </div>
-            ) : (
-              actionLog.map((log) => (
-                <div
-                  key={log.id}
-                  className="flex items-center justify-between p-4 rounded-xl bg-white/[0.02] border border-white/5 hover:border-white/20 transition-all group animate-in slide-in-from-right duration-300"
-                >
-                  <div className="flex flex-col gap-1">
-                    <span className={`text-sm font-black italic uppercase tracking-wider ${getActionColor(log.type)}`}>
-                      {log.side} {log.type}
-                    </span>
-                    <span className="text-[9px] text-white/20 font-mono tracking-widest group-hover:text-white/40 transition-colors">
-                      TIME_REF: {log.timeStr}
-                    </span>
-                  </div>
-                  <div className={`p-2 rounded-lg bg-black/40 border border-white/5 ${getActionColor(log.type)} opacity-50`}>
-                    {log.type === 'Hit' ? <Zap size={14} /> : <Shield size={14} />}
-                  </div>
+            <div style={{ flex:1, overflowY:'auto', padding:12, display:'flex', flexDirection:'column', gap:6 }}>
+              {log.length === 0 && (
+                <div style={{ color:'rgba(255,255,255,0.2)', fontSize:12, letterSpacing:'0.15em', textAlign:'center', marginTop:24 }}>
+                  AWAITING INPUT
                 </div>
-              ))
-            )}
-            <div ref={logEndRef} />
+              )}
+              {log.map(entry => (
+                <div key={entry.id} style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'8px 12px', background:'rgba(255,255,255,0.03)', borderRadius:8, border:'1px solid rgba(255,255,255,0.06)' }}>
+                  <span style={{ fontWeight:700, letterSpacing:'0.1em', fontSize:13, color: entry.action === 'block' ? '#3b82f6' : '#ef4444' }}>
+                    {entry.label}
+                  </span>
+                  <span style={{ fontSize:10, color:'rgba(255,255,255,0.3)', fontFamily:'monospace' }}>
+                    {entry.time}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="mt-8 flex items-center gap-8 opacity-20">
-        <div className="h-[1px] w-32 bg-gradient-to-r from-transparent to-white" />
-        <p className="text-[9px] font-black uppercase tracking-[1em] italic text-white whitespace-nowrap">Neural Combat Interface v0.3.5</p>
-        <div className="h-[1px] w-32 bg-gradient-to-l from-transparent to-white" />
+        {/* Right column: ninja model */}
+        <div style={{ flex:1, position:'relative', borderRadius:16, overflow:'hidden', border:'1px solid rgba(255,255,255,0.1)', background:'#0a0a0a' }}>
+
+          {/* Last action flash */}
+          {lastAction && performance.now() - lastAction.ts < 1000 && (
+            <div style={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%,-50%)', zIndex:10, textAlign:'center', pointerEvents:'none' }}>
+              <div style={{ fontSize:48, fontWeight:900, letterSpacing:'0.05em', fontStyle:'italic', color: lastAction.action === 'block' ? '#3b82f6' : '#ef4444', textShadow:'0 0 40px currentColor' }}>
+                {lastAction.label}
+              </div>
+            </div>
+          )}
+
+          <Canvas
+            shadows
+            gl={{ antialias: true, alpha: true }}
+            dpr={[1, 1.5]}
+            style={{ width:'100%', height:'100%' }}
+          >
+            <PerspectiveCamera makeDefault position={[0, 1.2, 4]} fov={45} />
+            <ambientLight intensity={1.0} />
+            <directionalLight position={[5, 5, 5]} intensity={1.5} castShadow />
+            <pointLight position={[-3, 3, -3]} intensity={0.6} color="#4488ff" />
+            <Suspense fallback={null}>
+              <NinjaModel ref={ninjaRef} position={[0, -1.2, 0]} scale={2} />
+              <Preload all />
+            </Suspense>
+            <ContactShadows opacity={0.4} scale={10} blur={2} far={4} />
+          </Canvas>
+        </div>
+
       </div>
     </div>
   );

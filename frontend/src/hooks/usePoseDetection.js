@@ -1,58 +1,47 @@
 import { useEffect, useRef, useState } from 'react';
 import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 
-const MEDIAPIPE_WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
-
-// SWITCHED TO LITE MODEL for raw speed. Full model is too slow for real-time boxing.
-const POSE_MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+const WASM_URL  = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
+const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task';
 
 export const usePoseDetection = (videoRef) => {
-  const [poseLandmarker, setPoseLandmarker] = useState(null);
-  const [results, setResults] = useState(null);
-  const requestRef = useRef();
-  const lastVideoTimeRef = useRef(-1);
+  const [landmarker, setLandmarker] = useState(null);
+  const [results, setResults]       = useState(null);
+  const rafRef      = useRef();
+  const lastTimeRef = useRef(-1);
 
   useEffect(() => {
-    const initPose = async () => {
-      const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
-      const landmarker = await PoseLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: POSE_MODEL_URL,
-          delegate: 'GPU',
-        },
+    let cancelled = false;
+    (async () => {
+      const vision = await FilesetResolver.forVisionTasks(WASM_URL);
+      const lm = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
         runningMode: 'VIDEO',
         numPoses: 1,
-        minPoseDetectionConfidence: 0.5,
-        minPosePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-        outputSegmentationMasks: false,
       });
-      setPoseLandmarker(landmarker);
-    };
-    initPose();
+      if (!cancelled) setLandmarker(lm);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
+    if (!landmarker) return;
     const detect = () => {
-      if (poseLandmarker && videoRef.current && videoRef.current.readyState >= 2) {
-        const startTimeMs = performance.now();
-        if (lastVideoTimeRef.current !== videoRef.current.currentTime) {
-          lastVideoTimeRef.current = videoRef.current.currentTime;
-          const result = poseLandmarker.detectForVideo(videoRef.current, startTimeMs);
-          if (result.landmarks && result.landmarks.length > 0) {
-            setResults({
-              points: result.landmarks[0],
-              timestamp: startTimeMs
-            });
-          }
-        }
+      const video = videoRef.current;
+      if (video && video.readyState >= 2 && video.currentTime !== lastTimeRef.current) {
+        lastTimeRef.current = video.currentTime;
+        const r = landmarker.detectForVideo(video, performance.now());
+        setResults(
+          r.landmarks?.length > 0
+            ? { points: r.landmarks[0], timestamp: performance.now() }
+            : null
+        );
       }
-      requestRef.current = requestAnimationFrame(detect);
+      rafRef.current = requestAnimationFrame(detect);
     };
-
-    requestRef.current = requestAnimationFrame(detect);
-    return () => cancelAnimationFrame(requestRef.current);
-  }, [poseLandmarker, videoRef]);
+    rafRef.current = requestAnimationFrame(detect);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [landmarker, videoRef]);
 
   return results;
 };

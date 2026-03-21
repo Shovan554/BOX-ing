@@ -7,7 +7,7 @@ const BackgroundMusic = ({ shouldPlayMusic, isMuted }) => {
   const [isPlaying, setIsPlaying] = useState(false);
 
   // Define paths where music should stop
-  const silentPaths = ['/multiplayer', '/camera-test'];
+  const silentPaths = ['/multiplayer', '/camera-test', '/multiplayer-arena'];
   const isSilentPath = silentPaths.includes(location.pathname);
 
   useEffect(() => {

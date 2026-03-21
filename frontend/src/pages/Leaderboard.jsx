@@ -64,7 +64,9 @@ const Leaderboard = () => {
           <h1 className="text-[8vw] font-black italic tracking-tighter text-white uppercase leading-none text-center drop-shadow-[0_0_20px_rgba(255,255,255,0.3)] whitespace-nowrap mb-6">
             LEADER<span className="text-red-600">BOARD</span>
           </h1>
-          <div className="text-white/20 font-black text-[10px] tracking-[0.8em] uppercase">Global Combat Ranks</div>
+          <div className="text-white/20 font-black text-[10px] tracking-[0.8em] uppercase">
+            Multiplayer wins (MVP)
+          </div>
         </div>
 
         <div className="w-full bg-black/40 backdrop-blur-2xl rounded-[40px] border border-white/10 overflow-hidden shadow-2xl relative">
