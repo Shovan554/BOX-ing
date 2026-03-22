@@ -26,6 +26,12 @@ const HAND_CONNECTIONS = [
 
 const MOTION_KEYS = ['idle', 'right_hit', 'left_hit', 'block'];
 
+/** Fixed defaults for camera test (no live calibration UI). */
+const CAMERA_TEST_THRESHOLDS = {
+  ...DEFAULT_BOXING_THRESHOLDS,
+  fistThreshold: 3,
+};
+
 const getLabel = (value) => {
   if (!value) return 'Unknown';
   return value.replaceAll('_', ' ').replace(/\b\w/g, (m) => m.toUpperCase());
@@ -65,10 +71,6 @@ const CameraTest = () => {
   const [showPoseDebug, setShowPoseDebug] = useState(true);
   const [poseDebugCopied, setPoseDebugCopied] = useState(false);
   const copyPoseDebugTimerRef = useRef(null);
-  const [thresholds, setThresholds] = useState(() => ({
-    ...DEFAULT_BOXING_THRESHOLDS,
-    fistThreshold: 3,
-  }));
   const localDetectorRefs = {
     leftWristHist: useRef([]),
     rightWristHist: useRef([]),
@@ -182,7 +184,7 @@ const CameraTest = () => {
       setPoseDebugJson('');
       return;
     }
-    const { motion: nextMotion, debug } = analyzeLocalPose(poseData.points, thresholds, localDetectorRefs);
+    const { motion: nextMotion, debug } = analyzeLocalPose(poseData.points, CAMERA_TEST_THRESHOLDS, localDetectorRefs);
     if (!showPoseDebug) {
       setPoseDebugJson('');
     } else if (debug) {
@@ -217,7 +219,7 @@ const CameraTest = () => {
         return [entry, ...prev].slice(0, 50);
       });
     }
-  }, [poseData, thresholds, showPoseDebug]);
+  }, [poseData, showPoseDebug]);
 
   useEffect(() => {
     if (!handData?.landmarks || !handData?.handedness) {
@@ -232,7 +234,7 @@ const CameraTest = () => {
     handData.landmarks.forEach((hand, hi) => {
       const h = handData.handedness[hi]?.[0] ?? {};
       const label = h.categoryName ?? h.category_name ?? h.label ?? '';
-      const state = getHandState(hand, thresholds.fistThreshold);
+      const state = getHandState(hand, CAMERA_TEST_THRESHOLDS.fistThreshold);
       // Video is mirrored, so MediaPipe Left maps to user right.
       if (label === 'Left') nextRight = state;
       if (label === 'Right') nextLeft = state;
@@ -240,7 +242,7 @@ const CameraTest = () => {
 
     setLeftHandState(nextLeft);
     setRightHandState(nextRight);
-  }, [handData, thresholds.fistThreshold]);
+  }, [handData]);
 
   // Send landmarks every frame
   useEffect(() => {
@@ -445,79 +447,6 @@ const CameraTest = () => {
         )}
         <div style={{ marginTop:8, fontSize:10, color:'rgba(255,255,255,0.4)', lineHeight:1.4 }}>
           <strong style={{ color:'rgba(255,255,255,0.55)' }}>L</strong> = MediaPipe left side of <em>your body</em> (appears on the right of the mirrored preview). Use <strong>distToNose2D</strong>, <strong>shoulderFwdZ</strong>, and <strong>hitGate</strong> to see why a swing reads as left vs right.
-        </div>
-      </div>
-
-      <div style={{ margin:'10px 16px 0', border:'1px solid rgba(255,255,255,0.12)', borderRadius:12, background:'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))', padding:'10px 12px', boxShadow:'0 0 30px rgba(34,197,94,0.08)' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-          <div style={{ fontSize:10, letterSpacing:'0.16em', color:'rgba(255,255,255,0.45)' }}>CALIBRATION</div>
-          <button
-            type="button"
-            onClick={() => setThresholds({ ...DEFAULT_BOXING_THRESHOLDS, fistThreshold: 3 })}
-            style={{ fontSize:10, letterSpacing:'0.12em', color:'#cbd5e1', background:'transparent', border:'1px solid rgba(255,255,255,0.2)', borderRadius:8, padding:'4px 8px', cursor:'pointer' }}
-          >
-            RESET
-          </button>
-        </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(4, minmax(0, 1fr))', gap:10 }}>
-          {[
-            ['hitElbowAngle', 'Hit Elbow', 120, 175, 1],
-            ['hitExtendFloor', 'Hit Extend', 0.8, 1.6, 0.01],
-            ['hitDelta', 'Hit Delta', 0.01, 0.5, 0.01],
-            ['hitDeltaForwardMin', 'Fwd Δ min', -0.45, 0.05, 0.01],
-            ['hitElbowForwardRelax', 'Fwd elbow −°', 5, 35, 1],
-            ['hitMinSpeed', 'Hit Speed', 0.005, 0.12, 0.005],
-            ['hitShoulderFwd', 'Shoulder Z', -40, 10, 1],
-            ['hitShoulderFwdRelax', 'Z relax', 5, 45, 1],
-            ['hitStrikeNoseGap', 'Strike nose', 0.008, 0.06, 0.002],
-            ['blockWristToNose', 'Block Nose', 0.08, 0.3, 0.01],
-            ['blockConfirmFrames', 'Block Frames', 1, 8, 1],
-            ['forwardPunchDepthMin', 'Fwd punch Z', 8, 45, 1],
-            ['blockMaxExtend', 'Block max ext', 1.05, 1.45, 0.01],
-            ['fistThreshold', 'Fist Curl', 2, 4, 1],
-          ].map(([key, label, min, max, step]) => (
-            <label key={key} style={{ display:'flex', flexDirection:'column', gap:4 }}>
-              <span style={{ fontSize:10, color:'rgba(255,255,255,0.65)', letterSpacing:'0.06em' }}>
-                {label}: {thresholds[key]}
-              </span>
-              <input
-                type="range"
-                min={min}
-                max={max}
-                step={step}
-                value={key === 'blockMaxExtend' ? (thresholds.blockMaxExtend ?? 1.45) : thresholds[key]}
-                onChange={(e) => {
-                  const intKeys = ['fistThreshold', 'blockConfirmFrames', 'hitElbowAngle', 'hitShoulderFwd', 'hitShoulderFwdRelax', 'forwardPunchDepthMin', 'hitElbowForwardRelax'];
-                  let value = intKeys.includes(key)
-                    ? parseInt(e.target.value, 10)
-                    : parseFloat(e.target.value);
-                  if (key === 'blockMaxExtend' && value >= 1.42) value = null;
-                  setThresholds(prev => ({ ...prev, [key]: value }));
-                }}
-              />
-            </label>
-          ))}
-        </div>
-        <div style={{ display:'flex', flexWrap:'wrap', gap:'12px 24px', marginTop:12, fontSize:11, color:'rgba(255,255,255,0.7)', letterSpacing:'0.06em' }}>
-          <label style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer' }}>
-            <input
-              type="checkbox"
-              checked={thresholds.swapMirrorArms}
-              onChange={(e) => setThresholds(prev => ({ ...prev, swapMirrorArms: e.target.checked }))}
-            />
-            Swap Left/Right hit labels (selfie mirror)
-          </label>
-          <label style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer' }}>
-            <input
-              type="checkbox"
-              checked={thresholds.blockSuppressForwardPunch !== false}
-              onChange={(e) => setThresholds(prev => ({ ...prev, blockSuppressForwardPunch: e.target.checked }))}
-            />
-            Block: don’t steal face-on straight punches (recommended)
-          </label>
-        </div>
-        <div style={{ marginTop:8, fontSize:10, color:'rgba(255,255,255,0.45)', lineHeight:1.45 }}>
-          <strong style={{ color:'rgba(255,255,255,0.55)' }}>Block max ext</strong> at the right = off (classic block). Lower it only if jabs still read as BLOCK.
         </div>
       </div>
 
