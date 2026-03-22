@@ -12,6 +12,22 @@ import { API_BASE_URL, WS_BASE_URL } from '../config/api';
 
 const MAX_HP = 100;
 const DAMAGE_PER_HIT = 10;
+/** If we were in block any time in this window (ms) before a remote hit, the hit is absorbed. */
+const BLOCK_ABSORB_WINDOW_MS = 320;
+/** Min gap between applying damage from remote hits (anti double-tap / lag dupes). */
+const MIN_REMOTE_HIT_DAMAGE_MS = 180;
+/** Throttle opponent ninja animation only (not damage). */
+const REMOTE_ANIM_COOLDOWN_MS = 380;
+
+function wasBlockingInWindow(history, nowPerf, windowMs) {
+  const cut = nowPerf - windowMs;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const e = history[i];
+    if (e.perf < cut) break;
+    if (e.motion === 'block') return true;
+  }
+  return false;
+}
 
 /**
  * Fighting stance from PovTest / arena layout:
@@ -57,7 +73,11 @@ const MultiplayerArena = () => {
   const lastMotionRef = useRef('idle');
   const lastLocalAnimRef = useRef(0);
   const lastSendRef = useRef(0);
-  const remoteCooldownUntilRef = useRef(0);
+  const remoteAnimCooldownUntilRef = useRef(0);
+  const lastRemoteHitDamageAtRef = useRef(0);
+  const gestureSeqRef = useRef(0);
+  const localMotionRef = useRef('idle');
+  const poseHistoryRef = useRef([]);
   const matchEndedRef = useRef(false);
   const localDetectorRefs = {
     leftWristHist: useRef([]),
@@ -132,27 +152,51 @@ const MultiplayerArena = () => {
         return;
       }
 
+      if (d.type === 'hit_absorbed' && d.absorbed === 'block') {
+        // Attacker: punch was blocked on the other side (optional feedback).
+        return;
+      }
+
       if (d.type !== 'gesture' || d.motion == null) return;
       if (matchEndedRef.current) return;
 
       const now = performance.now();
-      if (now < remoteCooldownUntilRef.current) return;
 
       const isHit = d.motion === 'left_hit' || d.motion === 'right_hit';
       if (isHit) {
-        setMyHp((prev) => {
-          const n = Math.max(0, prev - DAMAGE_PER_HIT);
+        const blocking =
+          localMotionRef.current === 'block' ||
+          wasBlockingInWindow(poseHistoryRef.current, now, BLOCK_ABSORB_WINDOW_MS);
+        if (blocking) {
           if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify({ type: 'health', hp: n }));
+            wsRef.current.send(
+              JSON.stringify({
+                type: 'hit_absorbed',
+                absorbed: 'block',
+                attackTs: d.ts ?? null,
+                attackPerf: d.perf ?? null,
+                attackSeq: d.seq ?? null,
+              })
+            );
           }
-          return n;
-        });
+        } else if (now - lastRemoteHitDamageAtRef.current >= MIN_REMOTE_HIT_DAMAGE_MS) {
+          lastRemoteHitDamageAtRef.current = now;
+          setMyHp((prev) => {
+            const n = Math.max(0, prev - DAMAGE_PER_HIT);
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: 'health', hp: n }));
+            }
+            return n;
+          });
+        }
       }
 
       if (opponentRef.current && d.motion !== 'idle') {
-        opponentRef.current.playAction(d.motion);
+        if (now >= remoteAnimCooldownUntilRef.current) {
+          opponentRef.current.playAction(d.motion);
+          remoteAnimCooldownUntilRef.current = now + REMOTE_ANIM_COOLDOWN_MS;
+        }
       }
-      remoteCooldownUntilRef.current = now + 420;
     },
     [sessionId]
   );
@@ -260,9 +304,16 @@ const MultiplayerArena = () => {
       return;
     }
     const next = detectLocalMotion(poseData.points, thresholds, localDetectorRefs);
+    const now = performance.now();
+    localMotionRef.current = next;
+    poseHistoryRef.current.push({ perf: now, motion: next });
+    const pruneBefore = now - 600;
+    while (poseHistoryRef.current.length && poseHistoryRef.current[0].perf < pruneBefore) {
+      poseHistoryRef.current.shift();
+    }
+
     setLocalMotion(next);
 
-    const now = performance.now();
     const changed = next !== lastMotionRef.current;
     lastMotionRef.current = next;
 
@@ -278,7 +329,16 @@ const MultiplayerArena = () => {
       now - lastSendRef.current > 380
     ) {
       lastSendRef.current = now;
-      wsRef.current.send(JSON.stringify({ type: 'gesture', motion: next }));
+      gestureSeqRef.current += 1;
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'gesture',
+          motion: next,
+          ts: Date.now(),
+          perf: now,
+          seq: gestureSeqRef.current,
+        })
+      );
     }
   }, [poseData, thresholds, gameResult]);
 

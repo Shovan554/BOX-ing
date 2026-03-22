@@ -68,7 +68,6 @@ const CameraTest = () => {
   const [leftHandState, setLeftHandState] = useState('unknown');
   const [rightHandState, setRightHandState] = useState('unknown');
   const [poseDebugJson, setPoseDebugJson] = useState('');
-  const [showPoseDebug, setShowPoseDebug] = useState(true);
   const [poseDebugCopied, setPoseDebugCopied] = useState(false);
   const copyPoseDebugTimerRef = useRef(null);
   const localDetectorRefs = {
@@ -185,9 +184,7 @@ const CameraTest = () => {
       return;
     }
     const { motion: nextMotion, debug } = analyzeLocalPose(poseData.points, CAMERA_TEST_THRESHOLDS, localDetectorRefs);
-    if (!showPoseDebug) {
-      setPoseDebugJson('');
-    } else if (debug) {
+    if (debug) {
       setPoseDebugJson(JSON.stringify(debug, null, 2));
     } else {
       setPoseDebugJson('(no pose debug — landmarks missing or low visibility)');
@@ -219,7 +216,7 @@ const CameraTest = () => {
         return [entry, ...prev].slice(0, 50);
       });
     }
-  }, [poseData, showPoseDebug]);
+  }, [poseData]);
 
   useEffect(() => {
     if (!handData?.landmarks || !handData?.handedness) {
@@ -398,55 +395,53 @@ const CameraTest = () => {
         </span>
       </div>
 
-      <div style={{ margin:'8px 16px 0', border:`1px solid ${motionState !== 'idle' ? 'rgba(34,197,94,0.45)' : 'rgba(255,255,255,0.12)'}`, borderRadius:12, background:'rgba(0,0,0,0.4)', padding:'10px 12px' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:8 }}>
-          <div style={{ fontSize:10, letterSpacing:'0.16em', color:'rgba(255,255,255,0.5)' }}>
-            POSE / HIT DEBUG — landmarks and metrics (for tuning left vs right)
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-            <button
-              type="button"
-              onClick={copyPoseDebugJson}
-              disabled={!poseDebugJson?.trim() || poseDebugJson === '…'}
-              style={{
-                fontSize:10,
-                letterSpacing:'0.12em',
-                color: poseDebugCopied ? '#4ade80' : '#cbd5e1',
-                background:'rgba(255,255,255,0.06)',
-                border:'1px solid rgba(255,255,255,0.2)',
-                borderRadius:8,
-                padding:'6px 12px',
-                cursor: (!poseDebugJson?.trim() || poseDebugJson === '…') ? 'not-allowed' : 'pointer',
-                opacity: (!poseDebugJson?.trim() || poseDebugJson === '…') ? 0.45 : 1,
-              }}
-            >
-              {poseDebugCopied ? 'COPIED' : 'COPY JSON'}
-            </button>
-            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:11, color:'rgba(255,255,255,0.75)' }}>
-              <input type="checkbox" checked={showPoseDebug} onChange={(e) => setShowPoseDebug(e.target.checked)} />
-              Show live JSON
-            </label>
-          </div>
+      <div style={{ margin:'8px 16px 0', border:`1px solid ${motionState !== 'idle' ? 'rgba(34,197,94,0.45)' : 'rgba(255,255,255,0.12)'}`, borderRadius:12, background:'rgba(0,0,0,0.4)', padding:'8px 10px' }}>
+        <div style={{ fontSize:9, letterSpacing:'0.14em', color:'rgba(255,255,255,0.45)', marginBottom:6 }}>
+          POSE / HIT DEBUG
         </div>
-        {showPoseDebug && (
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
           <pre
             style={{
+              flex:1,
+              minWidth:0,
               margin:0,
-              maxHeight:220,
+              height:96,
+              minHeight:96,
+              maxHeight:96,
               overflow:'auto',
-              fontSize:10,
-              lineHeight:1.35,
+              padding:'6px 8px',
+              borderRadius:8,
+              border:'1px solid rgba(255,255,255,0.08)',
+              background:'rgba(0,0,0,0.35)',
+              fontSize:9,
+              lineHeight:1.3,
               color:'#a7f3d0',
               fontFamily:'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-              whiteSpace:'pre-wrap',
-              wordBreak:'break-word',
+              whiteSpace:'pre',
+              overflowWrap:'normal',
             }}
           >
             {poseDebugJson || '…'}
           </pre>
-        )}
-        <div style={{ marginTop:8, fontSize:10, color:'rgba(255,255,255,0.4)', lineHeight:1.4 }}>
-          <strong style={{ color:'rgba(255,255,255,0.55)' }}>L</strong> = MediaPipe left side of <em>your body</em> (appears on the right of the mirrored preview). Use <strong>distToNose2D</strong>, <strong>shoulderFwdZ</strong>, and <strong>hitGate</strong> to see why a swing reads as left vs right.
+          <button
+            type="button"
+            onClick={copyPoseDebugJson}
+            disabled={!poseDebugJson?.trim() || poseDebugJson === '…'}
+            style={{
+              flexShrink:0,
+              fontSize:10,
+              letterSpacing:'0.12em',
+              color: poseDebugCopied ? '#4ade80' : '#cbd5e1',
+              background:'rgba(255,255,255,0.06)',
+              border:'1px solid rgba(255,255,255,0.2)',
+              borderRadius:8,
+              padding:'6px 12px',
+              cursor: (!poseDebugJson?.trim() || poseDebugJson === '…') ? 'not-allowed' : 'pointer',
+              opacity: (!poseDebugJson?.trim() || poseDebugJson === '…') ? 0.45 : 1,
+            }}
+          >
+            {poseDebugCopied ? 'COPIED' : 'COPY JSON'}
+          </button>
         </div>
       </div>
 
