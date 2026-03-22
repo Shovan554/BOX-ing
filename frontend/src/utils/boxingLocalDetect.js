@@ -4,10 +4,19 @@
  */
 
 export const DEFAULT_BOXING_THRESHOLDS = {
-  hitElbowAngle: 150,
+  /** Straight arm at shoulder–elbow–wrist; real jabs are often ~125–148°. */
+  hitElbowAngle: 145,
+  /**
+   * When that arm is clearly punching forward (Z depth), allow this many degrees below hitElbowAngle.
+   * Matches bent-elbow snaps that still have strong forward depth.
+   */
+  hitElbowForwardRelax: 22,
   hitExtendFloor: 1.1,
-  hitDelta: 0.3,
-  hitMinSpeed: 0.015,
+  /** Min extend vs rolling median; forward-punch path can use hitDeltaForwardMin instead. */
+  hitDelta: 0.04,
+  /** When forwardPunch + depth + extend pass, allow negative delta (median often stays high mid-combo). */
+  hitDeltaForwardMin: -0.25,
+  hitMinSpeed: 0.012,
   hitShoulderFwd: -15,
   hitShoulderFwdRelax: 22,
   hitStrikeNoseGap: 0.028,
@@ -42,14 +51,24 @@ const angleDeg = (a, b, c) => {
   return Math.acos(clamp(dot / (n1 * n2), -1, 1)) * (180 / Math.PI);
 };
 
+const round3 = (n) => (typeof n === 'number' && Number.isFinite(n) ? Math.round(n * 1000) / 1000 : n);
+
+const lm = (p) =>
+  p
+    ? { x: round3(p.x), y: round3(p.y), z: round3(p.z), vis: round3(p.visibility ?? 1) }
+    : null;
+
 /**
+ * Full pose analysis for local detection + Camera Test debug overlay.
+ * MediaPipe indices: 11 L shoulder, 12 R shoulder, 15 L wrist, 16 R wrist (subject, not mirror).
+ *
  * @param {Array} points - pose landmarks
  * @param {object} thresholds - see DEFAULT_BOXING_THRESHOLDS
  * @param {object} refs - { leftWristHist, rightWristHist, leftExtendHist, rightExtendHist, blockFrames } with .current
- * @returns {'idle'|'block'|'left_hit'|'right_hit'}
+ * @returns {{ motion: 'idle'|'block'|'left_hit'|'right_hit', debug: object|null }}
  */
-export function detectLocalMotion(points, thresholds, refs) {
-  if (!points) return 'idle';
+export function analyzeLocalPose(points, thresholds, refs) {
+  if (!points) return { motion: 'idle', debug: null };
   const leftShoulder = points[11];
   const rightShoulder = points[12];
   const leftElbow = points[13];
@@ -59,7 +78,9 @@ export function detectLocalMotion(points, thresholds, refs) {
   const leftHip = points[23];
   const rightHip = points[24];
   const nose = points[0];
-  if (!leftShoulder || !rightShoulder || !leftWrist || !rightWrist || !rightElbow || !leftElbow || !rightHip || !leftHip || !nose) return 'idle';
+  if (!leftShoulder || !rightShoulder || !leftWrist || !rightWrist || !rightElbow || !leftElbow || !rightHip || !leftHip || !nose) {
+    return { motion: 'idle', debug: null };
+  }
   if (
     leftShoulder.visibility < 0.5 ||
     rightShoulder.visibility < 0.5 ||
@@ -67,7 +88,9 @@ export function detectLocalMotion(points, thresholds, refs) {
     rightWrist.visibility < 0.5 ||
     leftElbow.visibility < 0.5 ||
     rightElbow.visibility < 0.5
-  ) return 'idle';
+  ) {
+    return { motion: 'idle', debug: null };
+  }
 
   const LS = [leftShoulder.x, leftShoulder.y, leftShoulder.z];
   const RS = [rightShoulder.x, rightShoulder.y, rightShoulder.z];
@@ -121,9 +144,12 @@ export function detectLocalMotion(points, thresholds, refs) {
   const fwdMin = thresholds.forwardPunchDepthMin ?? 22;
   const lForwardPunch = Math.abs(leftWrist.z - leftShoulder.z) * Z_SCALE >= fwdMin;
   const rForwardPunch = Math.abs(rightWrist.z - rightShoulder.z) * Z_SCALE >= fwdMin;
+  const lPunchDepth = Math.abs(leftWrist.z - leftShoulder.z) * Z_SCALE;
+  const rPunchDepth = Math.abs(rightWrist.z - rightShoulder.z) * Z_SCALE;
 
   const hitExtFloor = thresholds.hitExtendFloor ?? 1.1;
-  const hitElbowMin = thresholds.hitElbowAngle ?? 150;
+  const hitElbowMin = thresholds.hitElbowAngle ?? 145;
+  const hitElbowFwdRelax = thresholds.hitElbowForwardRelax ?? 22;
   /** Optional cap: both arms must stay “short” for block (tightens vs face-on jabs; null = disabled). */
   const maxExt = thresholds.blockMaxExtend;
   const compactGuard =
@@ -144,7 +170,32 @@ export function detectLocalMotion(points, thresholds, refs) {
 
   if (bothNearFace) refs.blockFrames.current += 1;
   else refs.blockFrames.current = 0;
-  if (refs.blockFrames.current >= thresholds.blockConfirmFrames) return 'block';
+  if (refs.blockFrames.current >= thresholds.blockConfirmFrames) {
+    const motion = 'block';
+    const debug = {
+      note: 'MediaPipe: idx 11=L shoulder, 12=R, 15=L wrist, 16=R wrist (subject). Preview is mirrored.',
+      landmarks: {
+        nose: lm(nose),
+        L_shoulder: lm(leftShoulder),
+        R_shoulder: lm(rightShoulder),
+        L_elbow: lm(leftElbow),
+        R_elbow: lm(rightElbow),
+        L_wrist: lm(leftWrist),
+        R_wrist: lm(rightWrist),
+        L_hip: lm(leftHip),
+        R_hip: lm(rightHip),
+      },
+      blockFrames: refs.blockFrames.current,
+      bothNearFace,
+      compactGuard,
+      suppressBlockForStraightPunch,
+      lDistToNose: round3(lDistToNose),
+      rDistToNose: round3(rDistToNose),
+      extend: { L: round3(lExtend), R: round3(rExtend) },
+      motion,
+    };
+    return { motion, debug };
+  }
 
   const lShoulderFwd = (leftShoulder.z - rightShoulder.z) * Z_SCALE;
   const rShoulderFwd = (rightShoulder.z - leftShoulder.z) * Z_SCALE;
@@ -153,18 +204,31 @@ export function detectLocalMotion(points, thresholds, refs) {
   const leftStriking = lDistToNose > rDistToNose + noseGap;
   const rightStriking = rDistToNose > lDistToNose + noseGap;
 
+  const hitDeltaBase = thresholds.hitDelta ?? 0.04;
+  const hitDeltaFwdMin = thresholds.hitDeltaForwardMin ?? -0.25;
+  const extendSlack = 0.05;
+  const lForwardForHit =
+    lForwardPunch && lPunchDepth >= fwdMin && lExtend >= hitExtFloor - extendSlack;
+  const rForwardForHit =
+    rForwardPunch && rPunchDepth >= fwdMin && rExtend >= hitExtFloor - extendSlack;
+  const lDeltaOk = lDelta >= hitDeltaBase || (lForwardForHit && lDelta >= hitDeltaFwdMin);
+  const rDeltaOk = rDelta >= hitDeltaBase || (rForwardForHit && rDelta >= hitDeltaFwdMin);
+
+  const lElbowMinEff = lForwardForHit ? hitElbowMin - hitElbowFwdRelax : hitElbowMin;
+  const rElbowMinEff = rForwardForHit ? hitElbowMin - hitElbowFwdRelax : hitElbowMin;
+
   const leftHitCore =
     lHandUp &&
-    lElbowAng >= thresholds.hitElbowAngle &&
+    lElbowAng >= lElbowMinEff &&
     lExtend >= thresholds.hitExtendFloor &&
-    lDelta >= thresholds.hitDelta &&
+    lDeltaOk &&
     lwSpeed >= thresholds.hitMinSpeed;
 
   const rightHitCore =
     rHandUp &&
-    rElbowAng >= thresholds.hitElbowAngle &&
+    rElbowAng >= rElbowMinEff &&
     rExtend >= thresholds.hitExtendFloor &&
-    rDelta >= thresholds.hitDelta &&
+    rDeltaOk &&
     rwSpeed >= thresholds.hitMinSpeed;
 
   const zLo = thresholds.hitShoulderFwd;
@@ -203,8 +267,63 @@ export function detectLocalMotion(points, thresholds, refs) {
   }
 
   if (motion !== 'idle' && thresholds.swapMirrorArms) {
-    if (motion === 'left_hit') return 'right_hit';
-    if (motion === 'right_hit') return 'left_hit';
+    if (motion === 'left_hit') motion = 'right_hit';
+    else if (motion === 'right_hit') motion = 'left_hit';
   }
-  return motion;
+
+  const zLoNum = zLo;
+  const debug = {
+    note: 'MediaPipe: idx 11=L shoulder, 12=R, 15=L wrist, 16=R wrist (subject). Preview is mirrored.',
+    landmarks: {
+      nose: lm(nose),
+      L_shoulder: lm(leftShoulder),
+      R_shoulder: lm(rightShoulder),
+      L_elbow: lm(leftElbow),
+      R_elbow: lm(rightElbow),
+      L_wrist: lm(leftWrist),
+      R_wrist: lm(rightWrist),
+      L_hip: lm(leftHip),
+      R_hip: lm(rightHip),
+    },
+    noseGap: round3(noseGap),
+    distToNose2D: { L_wrist: round3(lDistToNose), R_wrist: round3(rDistToNose), deltaLR: round3(lDistToNose - rDistToNose) },
+    strikingFlag: { left: leftStriking, right: rightStriking },
+    shoulderFwdZ: { L_minus_R_x640: round3(lShoulderFwd), R_minus_L_x640: round3(rShoulderFwd), needMin: zLoNum, relaxBand: zRelax },
+    punchDepthZ: { L: round3(lPunchDepth), R: round3(rPunchDepth), needMin: fwdMin },
+    extend: { L: round3(lExtend), R: round3(rExtend), baseL: round3(lBase), baseR: round3(rBase) },
+    delta: {
+      L: round3(lDelta),
+      R: round3(rDelta),
+      needMin: hitDeltaBase,
+      needMinForward: hitDeltaFwdMin,
+      forwardRelax: { L: lForwardForHit, R: rForwardForHit },
+    },
+    speed: { L: round3(lwSpeed), R: round3(rwSpeed), needMin: thresholds.hitMinSpeed },
+    elbowDeg: {
+      L: round3(lElbowAng),
+      R: round3(rElbowAng),
+      needMin: hitElbowMin,
+      needMinForward: round3(hitElbowMin - hitElbowFwdRelax),
+      forwardRelax: { L: lForwardForHit, R: rForwardForHit },
+    },
+    handUp: { L: lHandUp, R: rHandUp },
+    hitCore: { L: leftHitCore, R: rightHitCore },
+    hitGate: { L: leftHit, R: rightHit },
+    tieBreak: { lScore: round3(lDelta * lwSpeed + lExtend * 0.15), rScore: round3(rDelta * rwSpeed + rExtend * 0.15) },
+    blockFrames: refs.blockFrames.current,
+    swapMirrorArms: !!thresholds.swapMirrorArms,
+    motion,
+  };
+
+  return { motion, debug };
+}
+
+/**
+ * @param {Array} points - pose landmarks
+ * @param {object} thresholds - see DEFAULT_BOXING_THRESHOLDS
+ * @param {object} refs - { leftWristHist, rightWristHist, leftExtendHist, rightExtendHist, blockFrames } with .current
+ * @returns {'idle'|'block'|'left_hit'|'right_hit'}
+ */
+export function detectLocalMotion(points, thresholds, refs) {
+  return analyzeLocalPose(points, thresholds, refs).motion;
 }

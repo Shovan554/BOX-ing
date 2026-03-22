@@ -138,7 +138,7 @@ const CreateRoom = () => {
         const me = participants.find(u => u.session_id === sessionId);
         const opponent = participants.find(u => u.session_id !== sessionId);
         
-        navigate('/pov-test', { 
+        navigate('/multiplayer-arena', { 
           state: { 
             roomCode: roomCode,
             playerName: me?.player_name || 'You',

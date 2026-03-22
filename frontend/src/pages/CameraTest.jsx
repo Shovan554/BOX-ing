@@ -5,7 +5,7 @@ import { PerspectiveCamera, ContactShadows, Preload } from '@react-three/drei';
 import NinjaModel from '../components/NinjaModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useHandDetection } from '../hooks/useHandDetection';
-import { detectLocalMotion, DEFAULT_BOXING_THRESHOLDS } from '../utils/boxingLocalDetect';
+import { analyzeLocalPose, DEFAULT_BOXING_THRESHOLDS } from '../utils/boxingLocalDetect';
 import { API_BASE_URL, WS_BASE_URL } from '../config/api';
 
 // Pose skeleton connections to draw
@@ -61,6 +61,10 @@ const CameraTest = () => {
   const [motionState, setMotionState] = useState('idle');
   const [leftHandState, setLeftHandState] = useState('unknown');
   const [rightHandState, setRightHandState] = useState('unknown');
+  const [poseDebugJson, setPoseDebugJson] = useState('');
+  const [showPoseDebug, setShowPoseDebug] = useState(true);
+  const [poseDebugCopied, setPoseDebugCopied] = useState(false);
+  const copyPoseDebugTimerRef = useRef(null);
   const [thresholds, setThresholds] = useState(() => ({
     ...DEFAULT_BOXING_THRESHOLDS,
     fistThreshold: 3,
@@ -75,6 +79,20 @@ const CameraTest = () => {
   const localAnimCooldownRef = useRef(0);
   const lastLocalMotionRef = useRef('idle');
   const lastLocalLogRef = useRef(0);
+
+  const copyPoseDebugJson = () => {
+    const text = poseDebugJson?.trim();
+    if (!text || text === '…') return;
+    navigator.clipboard.writeText(text).then(() => {
+      setPoseDebugCopied(true);
+      if (copyPoseDebugTimerRef.current) clearTimeout(copyPoseDebugTimerRef.current);
+      copyPoseDebugTimerRef.current = setTimeout(() => setPoseDebugCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  useEffect(() => () => {
+    if (copyPoseDebugTimerRef.current) clearTimeout(copyPoseDebugTimerRef.current);
+  }, []);
 
   // Camera setup
   useEffect(() => {
@@ -161,9 +179,17 @@ const CameraTest = () => {
   useEffect(() => {
     if (!poseData?.points) {
       setMotionState('idle');
+      setPoseDebugJson('');
       return;
     }
-    const nextMotion = detectLocalMotion(poseData.points, thresholds, localDetectorRefs);
+    const { motion: nextMotion, debug } = analyzeLocalPose(poseData.points, thresholds, localDetectorRefs);
+    if (!showPoseDebug) {
+      setPoseDebugJson('');
+    } else if (debug) {
+      setPoseDebugJson(JSON.stringify(debug, null, 2));
+    } else {
+      setPoseDebugJson('(no pose debug — landmarks missing or low visibility)');
+    }
     setMotionState(nextMotion);
     const now = performance.now();
     const motionChanged = nextMotion !== lastLocalMotionRef.current;
@@ -191,7 +217,7 @@ const CameraTest = () => {
         return [entry, ...prev].slice(0, 50);
       });
     }
-  }, [poseData, thresholds]);
+  }, [poseData, thresholds, showPoseDebug]);
 
   useEffect(() => {
     if (!handData?.landmarks || !handData?.handedness) {
@@ -370,6 +396,58 @@ const CameraTest = () => {
         </span>
       </div>
 
+      <div style={{ margin:'8px 16px 0', border:`1px solid ${motionState !== 'idle' ? 'rgba(34,197,94,0.45)' : 'rgba(255,255,255,0.12)'}`, borderRadius:12, background:'rgba(0,0,0,0.4)', padding:'10px 12px' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8, flexWrap:'wrap', gap:8 }}>
+          <div style={{ fontSize:10, letterSpacing:'0.16em', color:'rgba(255,255,255,0.5)' }}>
+            POSE / HIT DEBUG — landmarks and metrics (for tuning left vs right)
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+            <button
+              type="button"
+              onClick={copyPoseDebugJson}
+              disabled={!poseDebugJson?.trim() || poseDebugJson === '…'}
+              style={{
+                fontSize:10,
+                letterSpacing:'0.12em',
+                color: poseDebugCopied ? '#4ade80' : '#cbd5e1',
+                background:'rgba(255,255,255,0.06)',
+                border:'1px solid rgba(255,255,255,0.2)',
+                borderRadius:8,
+                padding:'6px 12px',
+                cursor: (!poseDebugJson?.trim() || poseDebugJson === '…') ? 'not-allowed' : 'pointer',
+                opacity: (!poseDebugJson?.trim() || poseDebugJson === '…') ? 0.45 : 1,
+              }}
+            >
+              {poseDebugCopied ? 'COPIED' : 'COPY JSON'}
+            </button>
+            <label style={{ display:'flex', alignItems:'center', gap:8, cursor:'pointer', fontSize:11, color:'rgba(255,255,255,0.75)' }}>
+              <input type="checkbox" checked={showPoseDebug} onChange={(e) => setShowPoseDebug(e.target.checked)} />
+              Show live JSON
+            </label>
+          </div>
+        </div>
+        {showPoseDebug && (
+          <pre
+            style={{
+              margin:0,
+              maxHeight:220,
+              overflow:'auto',
+              fontSize:10,
+              lineHeight:1.35,
+              color:'#a7f3d0',
+              fontFamily:'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              whiteSpace:'pre-wrap',
+              wordBreak:'break-word',
+            }}
+          >
+            {poseDebugJson || '…'}
+          </pre>
+        )}
+        <div style={{ marginTop:8, fontSize:10, color:'rgba(255,255,255,0.4)', lineHeight:1.4 }}>
+          <strong style={{ color:'rgba(255,255,255,0.55)' }}>L</strong> = MediaPipe left side of <em>your body</em> (appears on the right of the mirrored preview). Use <strong>distToNose2D</strong>, <strong>shoulderFwdZ</strong>, and <strong>hitGate</strong> to see why a swing reads as left vs right.
+        </div>
+      </div>
+
       <div style={{ margin:'10px 16px 0', border:'1px solid rgba(255,255,255,0.12)', borderRadius:12, background:'linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))', padding:'10px 12px', boxShadow:'0 0 30px rgba(34,197,94,0.08)' }}>
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
           <div style={{ fontSize:10, letterSpacing:'0.16em', color:'rgba(255,255,255,0.45)' }}>CALIBRATION</div>
@@ -385,7 +463,9 @@ const CameraTest = () => {
           {[
             ['hitElbowAngle', 'Hit Elbow', 120, 175, 1],
             ['hitExtendFloor', 'Hit Extend', 0.8, 1.6, 0.01],
-            ['hitDelta', 'Hit Delta', 0.1, 0.7, 0.01],
+            ['hitDelta', 'Hit Delta', 0.01, 0.5, 0.01],
+            ['hitDeltaForwardMin', 'Fwd Δ min', -0.45, 0.05, 0.01],
+            ['hitElbowForwardRelax', 'Fwd elbow −°', 5, 35, 1],
             ['hitMinSpeed', 'Hit Speed', 0.005, 0.12, 0.005],
             ['hitShoulderFwd', 'Shoulder Z', -40, 10, 1],
             ['hitShoulderFwdRelax', 'Z relax', 5, 45, 1],
@@ -407,7 +487,7 @@ const CameraTest = () => {
                 step={step}
                 value={key === 'blockMaxExtend' ? (thresholds.blockMaxExtend ?? 1.45) : thresholds[key]}
                 onChange={(e) => {
-                  const intKeys = ['fistThreshold', 'blockConfirmFrames', 'hitElbowAngle', 'hitShoulderFwd', 'hitShoulderFwdRelax', 'forwardPunchDepthMin'];
+                  const intKeys = ['fistThreshold', 'blockConfirmFrames', 'hitElbowAngle', 'hitShoulderFwd', 'hitShoulderFwdRelax', 'forwardPunchDepthMin', 'hitElbowForwardRelax'];
                   let value = intKeys.includes(key)
                     ? parseInt(e.target.value, 10)
                     : parseFloat(e.target.value);
