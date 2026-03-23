@@ -2,6 +2,20 @@
 
 Modular FastAPI backend for real-time gesture detection and session management.
 
+## Live Service
+
+- Backend URL: [https://box-ing.onrender.com/](https://box-ing.onrender.com/)
+- Frontend URL: [https://box-ing-1d6g.onrender.com/](https://box-ing-1d6g.onrender.com/)
+
+### Important: Wake the backend before demos
+
+This Render service may sleep after ~15 minutes of inactivity.
+Wake it up before launching gameplay:
+
+```bash
+curl https://box-ing.onrender.com/
+```
+
 ## Prerequisites
 - Python 3.8+
 - pip

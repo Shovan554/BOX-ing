@@ -1,53 +1,105 @@
-# BOX-ing: Neural Combat Interface
+# BOX-ing
 
-**BOX-ing** is a high-performance, real-time boxing gesture recognition game that leverages **Computer Vision** and **3D Web Graphics** to create an immersive fitness-oriented gaming experience. By using your webcam, the system detects your movements—punches, blocks, and evasions—and translates them into actions performed by your in-game Ninja avatar.
+BOX-ing is a real-time, webcam-controlled boxing game where body gestures drive 3D fighter actions in multiplayer matches.
 
-## ✨ Core Features
-- **Real-time Gesture Detection**: Low-latency recognition of jabs, hooks, and blocks using MediaPipe.
-- **POV & Third-Person Modes**: Test your animations and perspective in a dedicated testing environment.
-- **Progressive Web App**: Smooth 60FPS performance on modern browsers.
-- **Global Leaderboard**: Compete with others for the highest combat efficiency score.
+## Live Deployment
 
-## 🚀 Tech Stack
+- **Frontend (Game UI):** [https://box-ing-1d6g.onrender.com/](https://box-ing-1d6g.onrender.com/)
+- **Backend (API + WebSocket):** [https://box-ing.onrender.com/](https://box-ing.onrender.com/)
+
+## Backend Wake-Up (Render Sleep)
+
+The backend service may sleep after about 15 minutes of inactivity on Render free tier.
+Before a demo or multiplayer match, wake it up once:
+
+```bash
+curl https://box-ing.onrender.com/
+```
+
+Then open the frontend URL.
+
+## Core Features
+
+- Real-time gesture detection (`left_hit`, `right_hit`, `block`) using MediaPipe Pose.
+- Multiplayer matchmaking and private-room play with low-latency WebSocket sync.
+- 3D arena rendering with React Three Fiber/Drei and animated fighter models.
+- Leaderboard integration for authenticated users.
+- Camera test mode for pose debugging and threshold calibration.
+
+## Tech Stack
 
 ### Frontend
-- **React 19 & Vite**: Ultra-fast development and build pipeline.
-- **Three.js (React Three Fiber & Drei)**: 3D engine for rendering characters and environments.
-- **MediaPipe Pose**: Client-side neural network for landmark tracking.
-- **Tailwind CSS v4**: Modern, utility-first styling for the HUD and menus.
-- **Lucide React**: Clean, consistent iconography.
+
+- React + Vite
+- React Router
+- Three.js via `@react-three/fiber` and `@react-three/drei`
+- MediaPipe Tasks Vision (`@mediapipe/tasks-vision`)
+- Framer Motion
 
 ### Backend
-- **Python 3.11+ & FastAPI**: High-performance asynchronous API framework.
-- **WebSockets**: Bi-directional communication for real-time detection data.
-- **NumPy**: Vector mathematics for skeletal analysis and gesture calculation.
-- **MongoDB Atlas**: Cloud-hosted NoSQL database for user profiles and leaderboards.
 
-## 🛠️ Requirements & Setup
+- Python + FastAPI
+- Uvicorn
+- WebSockets (Starlette/FastAPI)
+- MongoDB Atlas
+- JWT auth + Argon2 password hashing
+
+## Local Setup
 
 ### Prerequisites
-- **Node.js 18+** & **npm 9+**
-- **Python 3.11+**
-- **Webcam** (Required for gesture detection)
 
-### 1. Backend Initialization
+- Node.js 18+
+- Python 3.11+
+- Webcam access
+
+### 1) Run backend
+
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
-### 2. Frontend Initialization
+Windows activate command:
+
+```bash
+.venv\Scripts\activate
+```
+
+### 2) Run frontend
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## 📁 Project Structure
-- `/frontend`: React application, Three.js components, and MediaPipe hooks.
-- `/backend`: FastAPI routes, WebSocket logic, and MongoDB integration.
-- `/MODEL_ACTIONS.md`: Documentation for the Ninja avatar's animation states.
-- `/public/assets/models`: GLB assets including the `ninja.glb`.
+## Environment Variables
+
+### Frontend (`frontend/.env`)
+
+- `VITE_API_URL` - backend HTTP origin
+- `VITE_WS_URL` - backend WS origin (optional; can be derived)
+
+### Backend (`backend/.env`)
+
+- `MONGODB_URI`
+- `DB_NAME`
+- `SECRET_KEY`
+- `ALGORITHM`
+- `ACCESS_TOKEN_EXPIRE_MINUTES`
+
+## Project Docs
+
+- Project overview: `PROJECT_OVERVIEW.md`
+- Presentation architecture: `PRESENTATION_ARCHITECTURE.md`
+- Technical docs index: `docs/technical/README.md`
+- Backend-specific notes: `backend/README.md`
+
+## Project Structure
+
+- `frontend/` - game client, pose hooks, arena UI, multiplayer pages
+- `backend/` - FastAPI routes, matchmaking, sessions, WebSocket relays
+- `docs/technical/` - architecture, database schema, API and auth docs
