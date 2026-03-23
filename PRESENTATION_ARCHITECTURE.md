@@ -151,6 +151,36 @@ Handler **`handleRoomMessage`** (parse JSON):
 | **`type: "health"`** | Updates **opponent’s** HP bar (what they have left from their perspective — used to keep bars in sync). |
 | **`type: "disconnect"`** | Ignored for gameplay (could be extended). |
 
+### Exactly where hit and block are registered (code-level map)
+
+#### Hit registration
+
+1. **Detection source (attacker side):**  
+   `frontend/src/utils/boxingLocalDetect.js` inside `analyzeLocalPose(...)` sets:
+   - `motion = "left_hit"` or `motion = "right_hit"` when hit gates pass (elbow angle, extend, speed, depth/shoulder geometry).
+2. **Send gesture (attacker side):**  
+   `frontend/src/pages/MultiplayerArena.jsx` (pose `useEffect`) calls `detectLocalMotion(...)` and sends:
+   - `{ type: "gesture", motion: "left_hit" }` or `{ ... "right_hit" }`
+3. **Apply damage (defender side):**  
+   `handleRoomMessage(...)` in `MultiplayerArena.jsx`:
+   - reads incoming `type: "gesture"` hit
+   - if not blocked, runs `setMyHp(prev => prev - DAMAGE_PER_HIT)`
+   - then sends `{ type: "health", hp: newHp }` back to sync bars.
+
+#### Block registration
+
+1. **Detection source (defender side):**  
+   `boxingLocalDetect.js` marks `motion = "block"` when both wrists stay near face for `blockConfirmFrames`.
+2. **Local anti-flicker filter (defender side):**  
+   `MultiplayerArena.jsx` adds a short `BLOCK_TO_HIT_GRACE_MS` window:
+   - if a hit is detected immediately after block, it is treated as `block` to avoid block→hit jitter.
+3. **Block resolution on incoming hit:**  
+   In `handleRoomMessage(...)`, the defender checks:
+   - `localMotionRef.current === "block"` OR
+   - recent block in `wasBlockingInWindow(..., BLOCK_ABSORB_WINDOW_MS)`
+4. **If blocked:**  
+   no HP loss is applied; optional `{ type: "hit_absorbed", absorbed: "block" }` is sent to attacker.
+
 ### Win / leaderboard
 
 - When **`opponentHp`** hits 0 → local **win**; **`myHp`** 0 → **lose**.
