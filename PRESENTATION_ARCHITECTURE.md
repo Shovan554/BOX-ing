@@ -13,13 +13,16 @@ This document explains how the app runs end-to-end: authentication, multiplayer 
 | **Backend** | **FastAPI** (Python), **Uvicorn**, **WebSockets** (Starlette/FastAPI) |
 | **Auth** | **JWT** (python-jose), passwords hashed with **Argon2** (passlib) |
 | **Data** | **MongoDB Atlas** (users, sessions, rooms, matchmaking queue, leaderboard) |
-| **API config** | `frontend/src/config/api.js` — `VITE_API_URL` / `VITE_WS_URL` for production; local dev defaults to `http(s)://<host>:8000` |
+| **API config** | `frontend/src/config/api.js` — `VITE_API_URL` / `VITE_WS_URL` for production; local dev 
+
+defaults to `http(s)://<host>:8000` |
 
 ### Why these choices (talking points)
 
 - **FastAPI** — very fast to build typed REST + WebSocket APIs in one service; strong Pydantic validation; clean async support for real-time flows.
 - **OAuth2 password flow + JWT Bearer** — standard approach for SPA + API authentication; easy to call from frontend using `Authorization` headers; stateless auth at request time.
 - **Argon2 password hashing** — modern memory-hard hashing for safer password storage than basic hash methods.
+ **Hooks** — Hooks let us add behavior to function components without classes
 - **CORS middleware** — required because frontend and backend run on different origins in dev/prod. Implemented with:
   - `allow_origins=["*"]`
   - `allow_credentials=False`
