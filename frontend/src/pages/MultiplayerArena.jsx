@@ -16,6 +16,9 @@ const DAMAGE_PER_HIT = 10;
 const BLOCK_ABSORB_WINDOW_MS = 320;
 /** Ignore local hit gestures briefly right after a guard to avoid block->hit flicker damage. */
 const BLOCK_TO_HIT_GRACE_MS = 240;
+/** For a short time after block, require hit to persist for a few frames before accepting it. */
+const POST_BLOCK_HIT_CONFIRM_WINDOW_MS = 560;
+const POST_BLOCK_HIT_CONFIRM_FRAMES = 2;
 /** Min gap between applying damage from remote hits (anti double-tap / lag dupes). */
 const MIN_REMOTE_HIT_DAMAGE_MS = 180;
 /** Throttle opponent ninja animation only (not damage). */
@@ -78,6 +81,7 @@ const MultiplayerArena = () => {
   const remoteAnimCooldownUntilRef = useRef(0);
   const lastRemoteHitDamageAtRef = useRef(0);
   const lastBlockAtRef = useRef(0);
+  const postBlockHitCandidateRef = useRef({ motion: null, frames: 0 });
   const gestureSeqRef = useRef(0);
   const localMotionRef = useRef('idle');
   const poseHistoryRef = useRef([]);
@@ -313,8 +317,29 @@ const MultiplayerArena = () => {
     }
 
     const isDetectedHit = detected === 'left_hit' || detected === 'right_hit';
-    const withinPostBlockGrace = now - lastBlockAtRef.current < BLOCK_TO_HIT_GRACE_MS;
-    const next = isDetectedHit && withinPostBlockGrace ? 'block' : detected;
+    const sinceLastBlock = now - lastBlockAtRef.current;
+    const withinPostBlockGrace = sinceLastBlock < BLOCK_TO_HIT_GRACE_MS;
+    const inPostBlockConfirmWindow = sinceLastBlock < POST_BLOCK_HIT_CONFIRM_WINDOW_MS;
+
+    let next = detected;
+    if (isDetectedHit) {
+      if (withinPostBlockGrace || lastMotionRef.current === 'block') {
+        next = 'block';
+      } else if (inPostBlockConfirmWindow) {
+        const prevCandidate = postBlockHitCandidateRef.current;
+        const sameMotion = prevCandidate.motion === detected;
+        const frames = sameMotion ? prevCandidate.frames + 1 : 1;
+        postBlockHitCandidateRef.current = { motion: detected, frames };
+        if (frames < POST_BLOCK_HIT_CONFIRM_FRAMES) {
+          // Keep guarding until hit intent is stable for more than one frame.
+          next = 'block';
+        }
+      } else {
+        postBlockHitCandidateRef.current = { motion: null, frames: 0 };
+      }
+    } else {
+      postBlockHitCandidateRef.current = { motion: null, frames: 0 };
+    }
 
     localMotionRef.current = next;
     poseHistoryRef.current.push({ perf: now, motion: next });

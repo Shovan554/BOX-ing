@@ -25,6 +25,9 @@ const HAND_CONNECTIONS = [
 ];
 
 const MOTION_KEYS = ['idle', 'right_hit', 'left_hit', 'block'];
+const BLOCK_TO_HIT_GRACE_MS = 240;
+const POST_BLOCK_HIT_CONFIRM_WINDOW_MS = 560;
+const POST_BLOCK_HIT_CONFIRM_FRAMES = 2;
 
 /** Fixed defaults for camera test (no live calibration UI). */
 const CAMERA_TEST_THRESHOLDS = {
@@ -80,6 +83,8 @@ const CameraTest = () => {
   const localAnimCooldownRef = useRef(0);
   const lastLocalMotionRef = useRef('idle');
   const lastLocalLogRef = useRef(0);
+  const lastBlockAtRef = useRef(0);
+  const postBlockHitCandidateRef = useRef({ motion: null, frames: 0 });
 
   const copyPoseDebugJson = () => {
     const text = poseDebugJson?.trim();
@@ -183,14 +188,42 @@ const CameraTest = () => {
       setPoseDebugJson('');
       return;
     }
-    const { motion: nextMotion, debug } = analyzeLocalPose(poseData.points, CAMERA_TEST_THRESHOLDS, localDetectorRefs);
+    const { motion: detectedMotion, debug } = analyzeLocalPose(poseData.points, CAMERA_TEST_THRESHOLDS, localDetectorRefs);
     if (debug) {
       setPoseDebugJson(JSON.stringify(debug, null, 2));
     } else {
       setPoseDebugJson('(no pose debug — landmarks missing or low visibility)');
     }
-    setMotionState(nextMotion);
     const now = performance.now();
+    if (detectedMotion === 'block') {
+      lastBlockAtRef.current = now;
+    }
+
+    const isDetectedHit = detectedMotion === 'left_hit' || detectedMotion === 'right_hit';
+    const sinceLastBlock = now - lastBlockAtRef.current;
+    const withinPostBlockGrace = sinceLastBlock < BLOCK_TO_HIT_GRACE_MS;
+    const inPostBlockConfirmWindow = sinceLastBlock < POST_BLOCK_HIT_CONFIRM_WINDOW_MS;
+
+    let nextMotion = detectedMotion;
+    if (isDetectedHit) {
+      if (withinPostBlockGrace || lastLocalMotionRef.current === 'block') {
+        nextMotion = 'block';
+      } else if (inPostBlockConfirmWindow) {
+        const prevCandidate = postBlockHitCandidateRef.current;
+        const sameMotion = prevCandidate.motion === detectedMotion;
+        const frames = sameMotion ? prevCandidate.frames + 1 : 1;
+        postBlockHitCandidateRef.current = { motion: detectedMotion, frames };
+        if (frames < POST_BLOCK_HIT_CONFIRM_FRAMES) {
+          nextMotion = 'block';
+        }
+      } else {
+        postBlockHitCandidateRef.current = { motion: null, frames: 0 };
+      }
+    } else {
+      postBlockHitCandidateRef.current = { motion: null, frames: 0 };
+    }
+
+    setMotionState(nextMotion);
     const motionChanged = nextMotion !== lastLocalMotionRef.current;
     lastLocalMotionRef.current = nextMotion;
     if (ninjaRef.current && nextMotion !== 'idle' && motionChanged && now >= localAnimCooldownRef.current) {
