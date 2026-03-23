@@ -294,4 +294,28 @@ sequenceDiagram
 
 ---
 
+## 12. React hooks (presentation-ready explanation)
+
+Use this simple line in your presentation:
+
+**"Hooks let us add behavior to function components without classes."**
+
+### Core hooks you can explain quickly
+
+- **`useState`**: stores component state (e.g., `myHp`, `opponentHp`, `localMotion`).
+- **`useEffect`**: runs side effects when dependencies change (camera setup, websocket connect/disconnect, pose-reactive updates).
+- **`useRef`**: stores mutable values across renders without triggering re-render (websocket instance, cooldown timestamps, pose history).
+- **`useMemo`**: caches computed values (threshold objects, UI label arrays) to avoid unnecessary recalculation.
+- **`useCallback`**: caches function references (e.g., message handlers) so effect dependencies remain stable.
+
+### BOX-ing specific framing (short script)
+
+In BOX-ing, hooks power real-time game behavior in function components:
+- `useState` holds gameplay/UI state.
+- `useEffect` wires camera, networking, and lifecycle side effects.
+- `useRef` holds low-latency mutable runtime values used in frame-by-frame combat logic.
+- `useMemo` and `useCallback` reduce unnecessary recompute/re-subscription work and keep the arena loop stable.
+
+---
+
 *Generated from the BOX-ing repository structure. If behavior changes, verify against `main.py`, `AuthPage.jsx`, `MultiplayerArena.jsx`, and `CameraTest.jsx`.*
