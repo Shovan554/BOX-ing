@@ -14,6 +14,8 @@ const MAX_HP = 100;
 const DAMAGE_PER_HIT = 10;
 /** If we were in block any time in this window (ms) before a remote hit, the hit is absorbed. */
 const BLOCK_ABSORB_WINDOW_MS = 320;
+/** Ignore local hit gestures briefly right after a guard to avoid block->hit flicker damage. */
+const BLOCK_TO_HIT_GRACE_MS = 240;
 /** Min gap between applying damage from remote hits (anti double-tap / lag dupes). */
 const MIN_REMOTE_HIT_DAMAGE_MS = 180;
 /** Throttle opponent ninja animation only (not damage). */
@@ -75,6 +77,7 @@ const MultiplayerArena = () => {
   const lastSendRef = useRef(0);
   const remoteAnimCooldownUntilRef = useRef(0);
   const lastRemoteHitDamageAtRef = useRef(0);
+  const lastBlockAtRef = useRef(0);
   const gestureSeqRef = useRef(0);
   const localMotionRef = useRef('idle');
   const poseHistoryRef = useRef([]);
@@ -303,8 +306,16 @@ const MultiplayerArena = () => {
       setLocalMotion('idle');
       return;
     }
-    const next = detectLocalMotion(poseData.points, thresholds, localDetectorRefs);
+    const detected = detectLocalMotion(poseData.points, thresholds, localDetectorRefs);
     const now = performance.now();
+    if (detected === 'block') {
+      lastBlockAtRef.current = now;
+    }
+
+    const isDetectedHit = detected === 'left_hit' || detected === 'right_hit';
+    const withinPostBlockGrace = now - lastBlockAtRef.current < BLOCK_TO_HIT_GRACE_MS;
+    const next = isDetectedHit && withinPostBlockGrace ? 'block' : detected;
+
     localMotionRef.current = next;
     poseHistoryRef.current.push({ perf: now, motion: next });
     const pruneBefore = now - 600;
