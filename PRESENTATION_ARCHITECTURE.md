@@ -15,6 +15,21 @@ This document explains how the app runs end-to-end: authentication, multiplayer 
 | **Data** | **MongoDB Atlas** (users, sessions, rooms, matchmaking queue, leaderboard) |
 | **API config** | `frontend/src/config/api.js` — `VITE_API_URL` / `VITE_WS_URL` for production; local dev defaults to `http(s)://<host>:8000` |
 
+### Why these choices (talking points)
+
+- **FastAPI** — very fast to build typed REST + WebSocket APIs in one service; strong Pydantic validation; clean async support for real-time flows.
+- **OAuth2 password flow + JWT Bearer** — standard approach for SPA + API authentication; easy to call from frontend using `Authorization` headers; stateless auth at request time.
+- **Argon2 password hashing** — modern memory-hard hashing for safer password storage than basic hash methods.
+- **CORS middleware** — required because frontend and backend run on different origins in dev/prod. Implemented with:
+  - `allow_origins=["*"]`
+  - `allow_credentials=False`
+  - `allow_methods=["*"]`
+  - `allow_headers=["*"]`
+  This works because auth uses Bearer headers (not cross-site cookies).
+- **MongoDB Atlas** — document model fits flexible session/room/matchmaking payloads and quick iteration.
+- **WebSockets** — needed for low-latency two-player sync (gesture and HP events) without polling every frame.
+- **MediaPipe in browser** — keeps pose inference close to the camera feed (low latency), reducing server load and bandwidth.
+
 ---
 
 ## 2. Login and signup
