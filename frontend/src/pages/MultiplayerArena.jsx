@@ -106,6 +106,9 @@ const MultiplayerArena = () => {
   const [camReady, setCamReady] = useState(false);
   const [localMotion, setLocalMotion] = useState('idle');
 
+  const [gamePhase, setGamePhase] = useState('bow'); // 'bow' | 'fighting'
+  const bowTriggeredRef = useRef(false);
+
   const [myHp, setMyHp] = useState(MAX_HP);
   const [opponentHp, setOpponentHp] = useState(MAX_HP);
   const [gameResult, setGameResult] = useState(null); // null | 'win' | 'lose'
@@ -114,6 +117,26 @@ const MultiplayerArena = () => {
 
   const thresholds = useMemo(() => ({ ...DEFAULT_BOXING_THRESHOLDS }), []);
   const poseData = usePoseDetection(videoRef);
+
+  const handlePlayerActionFinish = useCallback((actionName) => {
+    if (actionName === 'bow') {
+      setGamePhase('fighting');
+    }
+  }, []);
+
+  // Play bow on both models as soon as refs are mounted
+  useEffect(() => {
+    if (bowTriggeredRef.current) return;
+    const interval = setInterval(() => {
+      if (playerRef.current && opponentRef.current) {
+        clearInterval(interval);
+        bowTriggeredRef.current = true;
+        playerRef.current.playAction('bow');
+        opponentRef.current.playAction('bow');
+      }
+    }, 100);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     navigator.mediaDevices
@@ -305,6 +328,7 @@ const MultiplayerArena = () => {
   }, [gameResult, roomCode, sessionId]);
 
   useEffect(() => {
+    if (gamePhase !== 'fighting') return;
     if (gameResult) return;
     if (!poseData?.points) {
       setLocalMotion('idle');
@@ -376,7 +400,7 @@ const MultiplayerArena = () => {
         })
       );
     }
-  }, [poseData, thresholds, gameResult]);
+  }, [poseData, thresholds, gameResult, gamePhase]);
 
   const labels = useMemo(
     () => [
@@ -464,7 +488,7 @@ const MultiplayerArena = () => {
             <NinjaModel ref={opponentRef} scale={FIGHTER_SCALE} rotation={OPPONENT_ROT} color={OPPONENT_COLOR} />
           </group>
           <group position={PLAYER_POS}>
-            <NinjaModel ref={playerRef} scale={FIGHTER_SCALE} rotation={PLAYER_ROT} color={PLAYER_COLOR} />
+            <NinjaModel ref={playerRef} scale={FIGHTER_SCALE} rotation={PLAYER_ROT} color={PLAYER_COLOR} onActionFinish={handlePlayerActionFinish} />
           </group>
 
           <Environment preset="night" />

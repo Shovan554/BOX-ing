@@ -1,4 +1,4 @@
-import React, { Suspense, useState, useEffect } from 'react';
+import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import MainMenu from './pages/MainMenu';
@@ -78,16 +78,16 @@ function App() {
     };
   }, []);
 
+  const handleIntroFinish = useCallback(() => {
+    setIntroFinished(true);
+    setShouldPlayMusic(true);
+    navigate('/');
+  }, [navigate]);
+
   return (
     <div className="w-full h-screen overflow-hidden text-white font-sans relative">
       {!introFinished && (
-        <Intro 
-          onFinish={() => {
-            setIntroFinished(true);
-            setShouldPlayMusic(true);
-            navigate('/'); // Force redirect to title page ONCE
-          }} 
-        />
+        <Intro onFinish={handleIntroFinish} />
       )}
       
       <BackgroundMusic shouldPlayMusic={shouldPlayMusic} isMuted={isMuted} />

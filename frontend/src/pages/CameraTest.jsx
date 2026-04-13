@@ -1,11 +1,13 @@
-import React, { useRef, useEffect, useState, Suspense } from 'react';
+import React, { useRef, useEffect, useState, Suspense, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Canvas } from '@react-three/fiber';
 import { PerspectiveCamera, ContactShadows, Preload } from '@react-three/drei';
 import NinjaModel from '../components/NinjaModel';
 import { usePoseDetection } from '../hooks/usePoseDetection';
 import { useHandDetection } from '../hooks/useHandDetection';
-import { analyzeLocalPose, DEFAULT_BOXING_THRESHOLDS } from '../utils/boxingLocalDetect';
+import { analyzeLocalPose } from '../utils/boxingLocalDetect';
+import { loadCalibration, clearCalibration } from '../utils/calibration';
+import CalibrationOverlay from '../components/CalibrationOverlay';
 import { API_BASE_URL, WS_BASE_URL } from '../config/api';
 
 // Pose skeleton connections to draw
@@ -29,11 +31,33 @@ const BLOCK_TO_HIT_GRACE_MS = 240;
 const POST_BLOCK_HIT_CONFIRM_WINDOW_MS = 560;
 const POST_BLOCK_HIT_CONFIRM_FRAMES = 2;
 
-/** Fixed defaults for camera test (no live calibration UI). */
-const CAMERA_TEST_THRESHOLDS = {
-  ...DEFAULT_BOXING_THRESHOLDS,
-  fistThreshold: 3,
-};
+const FIST_THRESHOLD = 3;
+
+/** Build active thresholds: calibrated values + fistThreshold override. */
+function buildThresholds(calibrated) {
+  const base = calibrated ?? {};
+  // Import defaults inline so we only need analyzeLocalPose from boxingLocalDetect
+  const DEFAULTS = {
+    hitElbowAngle: 145, hitElbowForwardRelax: 22, hitExtendFloor: 1.1,
+    hitDelta: 0.04, hitDeltaForwardMin: -0.25, hitMinSpeed: 0.012,
+    hitShoulderFwd: -15, hitShoulderFwdRelax: 22, hitStrikeNoseGap: 0.028,
+    swapMirrorArms: false, blockWristToNose: 0.15, blockMaxExtend: null,
+    blockConfirmFrames: 3, forwardPunchDepthMin: 22, blockSuppressForwardPunch: true,
+  };
+  const result = { ...DEFAULTS, ...base, fistThreshold: FIST_THRESHOLD };
+
+  // Old calibration data (saved before the v2 forward-punch tightening) omits
+  // forwardPunchDepthMin and hitDeltaForwardMin, so they fall back to permissive
+  // defaults (22 and -0.25). Those defaults combined with a lowered hitExtendFloor
+  // make the forward-punch relaxation path fire at idle, causing constant hit spam.
+  // Auto-upgrade any calibration that is missing these fields.
+  if (calibrated != null) {
+    if (base.forwardPunchDepthMin == null) result.forwardPunchDepthMin = 40;
+    if (base.hitDeltaForwardMin == null)   result.hitDeltaForwardMin   = 0.01;
+  }
+
+  return result;
+}
 
 const getLabel = (value) => {
   if (!value) return 'Unknown';
@@ -72,6 +96,11 @@ const CameraTest = () => {
   const [rightHandState, setRightHandState] = useState('unknown');
   const [poseDebugJson, setPoseDebugJson] = useState('');
   const [poseDebugCopied, setPoseDebugCopied] = useState(false);
+
+  // Calibration
+  const [calibrating, setCalibrating] = useState(false);
+  const [calibData, setCalibData] = useState(() => loadCalibration());
+  const activeThresholds = useMemo(() => buildThresholds(calibData?.thresholds ?? null), [calibData]);
   const copyPoseDebugTimerRef = useRef(null);
   const localDetectorRefs = {
     leftWristHist: useRef([]),
@@ -183,12 +212,13 @@ const CameraTest = () => {
   }, [sessionId]);
 
   useEffect(() => {
+    if (calibrating) return;
     if (!poseData?.points) {
       setMotionState('idle');
       setPoseDebugJson('');
       return;
     }
-    const { motion: detectedMotion, debug } = analyzeLocalPose(poseData.points, CAMERA_TEST_THRESHOLDS, localDetectorRefs);
+    const { motion: detectedMotion, debug } = analyzeLocalPose(poseData.points, activeThresholds, localDetectorRefs);
     if (debug) {
       setPoseDebugJson(JSON.stringify(debug, null, 2));
     } else {
@@ -264,7 +294,7 @@ const CameraTest = () => {
     handData.landmarks.forEach((hand, hi) => {
       const h = handData.handedness[hi]?.[0] ?? {};
       const label = h.categoryName ?? h.category_name ?? h.label ?? '';
-      const state = getHandState(hand, CAMERA_TEST_THRESHOLDS.fistThreshold);
+      const state = getHandState(hand, activeThresholds.fistThreshold);
       // Video is mirrored, so MediaPipe Left maps to user right.
       if (label === 'Left') nextRight = state;
       if (label === 'Right') nextLeft = state;
@@ -362,20 +392,61 @@ const CameraTest = () => {
         });
       });
     }
-  });
+  }, [poseData, handData]);
 
   return (
     <div style={{ width:'100%', height:'100vh', background:'radial-gradient(circle at 20% 10%, #101d2a 0%, #070b12 35%, #000 100%)', display:'flex', flexDirection:'column', position:'relative' }}>
       <div style={{ position:'absolute', inset:0, pointerEvents:'none', opacity:0.08, background:'linear-gradient(transparent 50%, rgba(255,255,255,0.15) 50%)', backgroundSize:'100% 4px' }} />
+
+      {/* Calibration overlay */}
+      {calibrating && (
+        <CalibrationOverlay
+          poseData={poseData}
+          onComplete={(thresholds) => {
+            // Reset rolling history so calibration activity doesn't poison the baseline
+            localDetectorRefs.leftWristHist.current   = [];
+            localDetectorRefs.rightWristHist.current  = [];
+            localDetectorRefs.leftExtendHist.current  = [];
+            localDetectorRefs.rightExtendHist.current = [];
+            localDetectorRefs.blockFrames.current     = 0;
+            lastLocalMotionRef.current = 'idle';
+            postBlockHitCandidateRef.current = { motion: null, frames: 0 };
+            setCalibData({ thresholds, timestamp: Date.now() });
+            setCalibrating(false);
+          }}
+          onCancel={() => setCalibrating(false)}
+        />
+      )}
 
       {/* Top bar */}
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'12px 24px', borderBottom:'1px solid rgba(255,255,255,0.1)' }}>
         <Link to="/menu" style={{ color:'rgba(255,255,255,0.5)', textDecoration:'none', fontSize:13, letterSpacing:'0.15em' }}>
           ← BACK
         </Link>
-        <span style={{ fontSize:11, letterSpacing:'0.2em', color: connected ? '#22c55e' : '#ef4444' }}>
-          {connected ? '● DETECTION ONLINE' : '● CONNECTING...'}
-        </span>
+
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          {/* Calibration status badge */}
+          {calibData && !calibrating && (
+            <button
+              onClick={() => { clearCalibration(); setCalibData(null); }}
+              title="Clear calibration"
+              style={{ background:'rgba(74,222,128,0.1)', border:'1px solid rgba(74,222,128,0.35)', borderRadius:8, padding:'4px 10px', fontSize:10, letterSpacing:'0.15em', color:'#4ade80', cursor:'pointer' }}
+            >
+              ✓ CALIBRATED  ✕
+            </button>
+          )}
+
+          <button
+            onClick={() => setCalibrating(true)}
+            style={{ background:'rgba(96,165,250,0.1)', border:'1px solid rgba(96,165,250,0.4)', borderRadius:8, padding:'5px 14px', fontSize:10, letterSpacing:'0.18em', color:'#93c5fd', cursor:'pointer', fontWeight:700 }}
+          >
+            CALIBRATE
+          </button>
+
+          <span style={{ fontSize:11, letterSpacing:'0.2em', color: connected ? '#22c55e' : '#ef4444' }}>
+            {connected ? '● DETECTION ONLINE' : '● CONNECTING...'}
+          </span>
+        </div>
       </div>
 
       <div style={{ display:'grid', gridTemplateColumns:'1.6fr 1fr', gap:12, padding:'12px 16px 0' }}>
