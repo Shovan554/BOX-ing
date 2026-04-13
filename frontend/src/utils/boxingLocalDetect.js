@@ -9,8 +9,9 @@ export const DEFAULT_BOXING_THRESHOLDS = {
   /**
    * When that arm is clearly punching forward (Z depth), allow this many degrees below hitElbowAngle.
    * Matches bent-elbow snaps that still have strong forward depth.
+   * Raised from 22→30 (effective min 115°) to catch left jabs with natural bent-elbow form.
    */
-  hitElbowForwardRelax: 22,
+  hitElbowForwardRelax: 30,
   hitExtendFloor: 1.1,
   /** Min extend vs rolling median; forward-punch path can use hitDeltaForwardMin instead. */
   hitDelta: 0.04,
@@ -113,8 +114,12 @@ export function analyzeLocalPose(points, thresholds, refs) {
 
   const lwHist = refs.leftWristHist.current;
   const rwHist = refs.rightWristHist.current;
-  const lwSpeed = lwHist.length >= 2 ? dist(lwHist[lwHist.length - 1], lwHist[lwHist.length - 2]) : 0;
-  const rwSpeed = rwHist.length >= 2 ? dist(rwHist[rwHist.length - 1], rwHist[rwHist.length - 2]) : 0;
+  // Use max speed over recent history so apex frames (where wrist momentarily
+  // decelerates to near-zero) still pass if the approach was fast.
+  let lwSpeed = 0;
+  for (let i = 1; i < lwHist.length; i++) lwSpeed = Math.max(lwSpeed, dist(lwHist[i - 1], lwHist[i]));
+  let rwSpeed = 0;
+  for (let i = 1; i < rwHist.length; i++) rwSpeed = Math.max(rwSpeed, dist(rwHist[i - 1], rwHist[i]));
 
   const lExtend = dist(LW, LS) / torsoLeft;
   const rExtend = dist(RW, RS) / torsoRight;
