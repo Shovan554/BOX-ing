@@ -2,7 +2,7 @@ import React, { Suspense, useState, useEffect, useCallback } from 'react';
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import LandingPage from './pages/LandingPage';
 import MainMenu from './pages/MainMenu';
-import CameraTest from './pages/CameraTest';
+import Training from './pages/Training';
 import Multiplayer from './pages/Multiplayer';
 import MultiplayerArena from './pages/MultiplayerArena';
 import CreateRoom from './pages/CreateRoom';
@@ -95,7 +95,7 @@ function App() {
       {introFinished && (
         <>
           {/* Global Controls Overlay - Hidden in arena screens */}
-          {location.pathname !== '/camera-test' && location.pathname !== '/multiplayer-arena' && (
+          {location.pathname !== '/training' && location.pathname !== '/multiplayer-arena' && (
             <div className="fixed top-4 right-4 z-[100] flex items-center gap-2">
               {/* Mute Button */}
               <button 
@@ -130,7 +130,7 @@ function App() {
               <Route path="/auth" element={<AuthPage />} />
               <Route path="/" element={<LandingPage />} />
               <Route path="/menu" element={<MainMenu />} />
-              <Route path="/camera-test" element={<CameraTest />} />
+              <Route path="/training" element={<Training />} />
               <Route path="/multiplayer" element={<Multiplayer />} />
               <Route path="/multiplayer-arena" element={<MultiplayerArena />} />
               <Route path="/create-room" element={<CreateRoom />} />

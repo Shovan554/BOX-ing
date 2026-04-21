@@ -29,7 +29,7 @@ const MainMenu = () => {
     { label: 'Multiplayer', path: '/multiplayer' },
     { label: 'Create Room', path: '/create-room' },
     { label: 'Leaderboard', path: '/leaderboard' },
-    { label: 'Camera Test', path: '/camera-test' },
+    { label: 'Training', path: '/training' },
   ];
 
   const handleLogout = () => {

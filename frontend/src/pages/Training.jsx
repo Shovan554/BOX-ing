@@ -76,7 +76,7 @@ const getHandState = (hand, fistThreshold = 3) => {
   return 'partial';
 };
 
-const CameraTest = () => {
+const Training = () => {
   const videoRef    = useRef(null);
   const canvasRef   = useRef(null);
   const ninjaRef    = useRef(null);
@@ -632,4 +632,4 @@ const CameraTest = () => {
   );
 };
 
-export default CameraTest;
+export default Training;
