@@ -390,6 +390,11 @@ const MultiplayerArena = () => {
   useEffect(() => {
     if (gamePhase !== 'fighting') return;
     if (gameResult) return;
+    // While my own ninja is mid-animation, freeze pose registration so the
+    // current clip plays through cleanly instead of being half-restarted into
+    // a T-pose. Damage from the opponent still applies — only my outgoing
+    // movement is paused.
+    if (playerRef.current?.isBusy?.()) return;
     if (!poseData?.points) {
       setLocalMotion('idle');
       return;

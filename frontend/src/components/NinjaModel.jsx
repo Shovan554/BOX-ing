@@ -29,22 +29,13 @@ const NinjaModel = forwardRef(({ color, onActionFinish, ...props }, ref) => {
     isBusy: () => !currentActionRef.current.toLowerCase().includes('idle'),
     playAction: (name, loop = false) => {
       const actionName = name.toLowerCase();
-      const currentLower = currentActionRef.current.toLowerCase();
 
-      const isCombat = (n) =>
-        (n.includes('hit') && !n.includes('got_hit')) || n.includes('block');
-      const incomingIsCombat = isCombat(actionName);
-      const currentIsCombat = isCombat(currentLower);
-      const incomingIsOverride = actionName.includes('got_hit') || actionName.includes('defeat');
-
-      // Block re-entry only when current is a non-idle, non-combat action (e.g. bow)
-      // and the incoming action isn't an override or another combat move.
-      if (
-        !currentLower.includes('idle') &&
-        !actionName.includes('idle') &&
-        !incomingIsOverride &&
-        !(incomingIsCombat && currentIsCombat)
-      ) {
+      // If we are already playing a non-idle animation, don't allow another one
+      // unless it's got_hit or defeat which should interrupt.
+      if (!currentActionRef.current.toLowerCase().includes('idle') &&
+          !actionName.includes('idle') &&
+          !actionName.includes('got_hit') &&
+          !actionName.includes('defeat')) {
         return false;
       }
 
@@ -57,22 +48,12 @@ const NinjaModel = forwardRef(({ color, onActionFinish, ...props }, ref) => {
       }
 
       if (targetAction) {
-        // If the same non-combat animation is already running, don't restart it.
-        // Combat moves (jab/block combos) should always restart so rapid hits
-        // are visible even when the previous clip hasn't finished yet.
-        if (
-          !incomingIsCombat &&
-          targetAction.isRunning() &&
-          (name === currentActionRef.current || actionName === currentLower)
-        ) {
-          return true;
-        }
+        // If the animation is already running, don't restart it
+        if (targetAction.isRunning() && (name === currentActionRef.current || actionName === currentActionRef.current.toLowerCase())) return true;
 
         const isBow = actionName.includes('bow');
-        // Combat interruptions use a tight crossfade so combos feel snappy
-        // without snapping mid-frame.
-        const fadeInTime = isBow ? 0.35 : incomingIsCombat ? 0.1 : 0.2;
-        const fadeOutTime = isBow ? 0.35 : incomingIsCombat ? 0.1 : 0.2;
+        const fadeInTime = isBow ? 0.35 : 0.2;
+        const fadeOutTime = isBow ? 0.35 : 0.2;
 
         // Stop current animations smoothly
         Object.values(actions).forEach(action => {
