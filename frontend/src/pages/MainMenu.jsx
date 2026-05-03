@@ -30,6 +30,7 @@ const MainMenu = () => {
     { label: 'Create Room', path: '/create-room' },
     { label: 'Leaderboard', path: '/leaderboard' },
     { label: 'Training', path: '/training' },
+    { label: 'Profile', path: '/profile' },
   ];
 
   const handleLogout = () => {

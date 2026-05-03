@@ -34,3 +34,23 @@ async def db_get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
         return None
     doc = await users_col.find_one({"_id": ObjectId(user_id)})
     return _normalize_user(doc)
+
+
+async def db_update_display_name(user_id: str, display_name: str) -> Optional[Dict[str, Any]]:
+    if not ObjectId.is_valid(user_id):
+        return None
+    await users_col.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"display_name": display_name.strip()}},
+    )
+    return await db_get_user_by_id(user_id)
+
+
+async def db_update_password(user_id: str, hashed_password: str) -> bool:
+    if not ObjectId.is_valid(user_id):
+        return False
+    result = await users_col.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"hashed_password": hashed_password}},
+    )
+    return result.modified_count == 1

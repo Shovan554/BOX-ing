@@ -11,7 +11,7 @@ import { detectLocalMotion, DEFAULT_BOXING_THRESHOLDS } from '../utils/boxingLoc
 import { API_BASE_URL, WS_BASE_URL } from '../config/api';
 
 const MAX_HP = 100;
-const DAMAGE_PER_HIT = 10;
+const DAMAGE_PER_HIT = 4;
 /** If we were in block any time in this window (ms) before a remote hit, the hit is absorbed. */
 const BLOCK_ABSORB_WINDOW_MS = 320;
 /** Ignore local hit gestures briefly right after a guard to avoid block->hit flicker damage. */
@@ -106,7 +106,11 @@ const MultiplayerArena = () => {
   const [camReady, setCamReady] = useState(false);
   const [localMotion, setLocalMotion] = useState('idle');
 
-  const [gamePhase, setGamePhase] = useState('bow'); // 'bow' | 'fighting'
+  const [gamePhase, setGamePhase] = useState('waiting'); // 'waiting' | 'ready_check' | 'bow' | 'fighting'
+  const [myReady, setMyReady] = useState(false);
+  const [opponentReady, setOpponentReady] = useState(false);
+  const [readySubmitting, setReadySubmitting] = useState(false);
+  const myReadyRef = useRef(false);
   const bowTriggeredRef = useRef(false);
 
   const [myHp, setMyHp] = useState(MAX_HP);
@@ -124,19 +128,69 @@ const MultiplayerArena = () => {
     }
   }, []);
 
-  // Play bow on both models as soon as refs are mounted
+  const handleReadyClick = useCallback(async () => {
+    if (myReady || readySubmitting) return;
+    setReadySubmitting(true);
+    setMyReady(true);
+    myReadyRef.current = true;
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'ready_state', ready: true }));
+    }
+    if (roomCode && sessionId) {
+      try {
+        await fetch(
+          `${API_BASE_URL}/room/${roomCode}/ready?session_id=${encodeURIComponent(sessionId)}`,
+          { method: 'POST' }
+        );
+      } catch {
+        /* ignore — websocket message is the source of truth for the opponent */
+      }
+    }
+    setReadySubmitting(false);
+  }, [myReady, readySubmitting, roomCode, sessionId]);
+
+  // Play bow on both models once both players are ready
   useEffect(() => {
+    if (gamePhase !== 'bow') return;
     if (bowTriggeredRef.current) return;
-    const interval = setInterval(() => {
+
+    let cancelled = false;
+    let rafId = 0;
+
+    const tryFire = () => {
+      if (cancelled || bowTriggeredRef.current) return;
       if (playerRef.current && opponentRef.current) {
-        clearInterval(interval);
         bowTriggeredRef.current = true;
+        // Fire on the same tick so both ninjas start in lockstep
         playerRef.current.playAction('bow');
         opponentRef.current.playAction('bow');
+        return;
       }
-    }, 100);
-    return () => clearInterval(interval);
-  }, []);
+      // GLB not mounted yet — retry next frame instead of busy polling
+      rafId = requestAnimationFrame(tryFire);
+    };
+
+    tryFire();
+    return () => {
+      cancelled = true;
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [gamePhase]);
+
+  // 3 sec preparation window after entering arena, then show the READY button
+  useEffect(() => {
+    if (gamePhase !== 'waiting') return;
+    const t = setTimeout(() => setGamePhase('ready_check'), 3000);
+    return () => clearTimeout(t);
+  }, [gamePhase]);
+
+  // When both players have signaled ready, kick off the bow → fight sequence
+  useEffect(() => {
+    if (gamePhase !== 'ready_check') return;
+    if (myReady && opponentReady) {
+      setGamePhase('bow');
+    }
+  }, [gamePhase, myReady, opponentReady]);
 
   useEffect(() => {
     navigator.mediaDevices
@@ -176,6 +230,11 @@ const MultiplayerArena = () => {
       }
       if (d.type === 'disconnect') return;
       if (d.session_id === sessionId) return;
+
+      if (d.type === 'ready_state') {
+        setOpponentReady(!!d.ready);
+        return;
+      }
 
       if (d.type === 'health' && typeof d.hp === 'number') {
         setOpponentHp(Math.min(MAX_HP, Math.max(0, d.hp)));
@@ -240,6 +299,7 @@ const MultiplayerArena = () => {
         setRoomConnected(true);
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'health', hp: MAX_HP }));
+          ws.send(JSON.stringify({ type: 'ready_state', ready: myReadyRef.current }));
         }
       };
       ws.onclose = () => {
@@ -469,6 +529,55 @@ const MultiplayerArena = () => {
         </div>
         <div className="absolute top-1 right-2 text-[9px] font-mono text-emerald-400/90">{localMotion}</div>
       </div>
+
+      {(gamePhase === 'waiting' || gamePhase === 'ready_check') && !gameResult && (
+        <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-md">
+          <div className="flex flex-col items-center gap-6 px-10 py-12 rounded-2xl border border-white/15 bg-zinc-950/80 shadow-[0_0_60px_rgba(220,38,38,0.25)] max-w-md w-[min(92vw,420px)]">
+            {gamePhase === 'waiting' ? (
+              <>
+                <div className="w-12 h-12 border-2 border-red-600/50 border-t-red-600 rounded-full animate-spin" />
+                <h2 className="text-3xl font-black italic tracking-tight text-white uppercase">
+                  Preparing Arena
+                </h2>
+                <p className="text-[10px] tracking-[0.4em] text-white/40 uppercase">
+                  Loading combatants…
+                </p>
+              </>
+            ) : (
+              <>
+                <h2 className="text-4xl font-black italic tracking-tight text-white uppercase">
+                  Ready?
+                </h2>
+                <button
+                  onClick={handleReadyClick}
+                  disabled={myReady || readySubmitting}
+                  className={`px-12 py-5 rounded-2xl font-black italic tracking-tight text-2xl uppercase transition-all duration-300 ${
+                    myReady
+                      ? 'bg-emerald-600/30 text-emerald-300 border border-emerald-500/50 cursor-default'
+                      : 'bg-red-600 text-white hover:bg-white hover:text-black shadow-[0_0_40px_rgba(220,38,38,0.4)] active:scale-95'
+                  }`}
+                >
+                  {myReady ? 'You are ready ✓' : "I'm Ready"}
+                </button>
+                <div className="grid grid-cols-2 gap-3 w-full text-center">
+                  <div className={`px-3 py-3 rounded-lg border ${myReady ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-white/5'}`}>
+                    <p className="text-[9px] tracking-[0.3em] text-white/40 uppercase mb-1">{playerName}</p>
+                    <p className={`text-[11px] font-black tracking-wider uppercase ${myReady ? 'text-emerald-400' : 'text-white/50'}`}>
+                      {myReady ? 'Ready' : 'Waiting'}
+                    </p>
+                  </div>
+                  <div className={`px-3 py-3 rounded-lg border ${opponentReady ? 'border-emerald-500/50 bg-emerald-500/10' : 'border-white/10 bg-white/5'}`}>
+                    <p className="text-[9px] tracking-[0.3em] text-white/40 uppercase mb-1">{opponentName}</p>
+                    <p className={`text-[11px] font-black tracking-wider uppercase ${opponentReady ? 'text-emerald-400' : 'text-white/50'}`}>
+                      {opponentReady ? 'Ready' : 'Waiting'}
+                    </p>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <Canvas
         shadows

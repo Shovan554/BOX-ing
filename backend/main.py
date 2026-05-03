@@ -184,12 +184,14 @@ def join_matchmaking(session_id: str, current_user=Depends(get_current_user_opti
             {
                 "user_id": player_session.get("user_id"),
                 "session_id": session_id,
-                "player_name": p_name
+                "player_name": p_name,
+                "ready": False
             },
             {
                 "user_id": opponent_session.get("user_id"),
                 "session_id": opponent_sid,
-                "player_name": o_name
+                "player_name": o_name,
+                "ready": False
             }
         ]
         
@@ -302,19 +304,41 @@ def room_status(room_code: str) -> dict:
     room = rooms_col.find_one({"room_code": room_code})
     if not room:
         return {"status": "not_found"}
-    
+
     users = room.get("users", [])
+    all_ready = len(users) >= 2 and all(u.get("ready", False) for u in users)
     if len(users) >= 2:
         return {
             "status": "ready",
-            "users": users,
+            "users": serialize_mongo(users),
+            "all_ready": all_ready,
             "room_code": room_code
         }
-    
+
     return {
         "status": "waiting",
-        "users": users,
+        "users": serialize_mongo(users),
+        "all_ready": False,
         "room_code": room_code
+    }
+
+
+@app.post("/room/{room_code}/ready")
+def mark_ready(room_code: str, session_id: str) -> dict:
+    room = rooms_col.find_one_and_update(
+        {"room_code": room_code, "users.session_id": session_id},
+        {"$set": {"users.$.ready": True}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not room:
+        raise HTTPException(status_code=404, detail="Room or user not found")
+
+    users = room.get("users", [])
+    all_ready = len(users) >= 2 and all(u.get("ready", False) for u in users)
+    return {
+        "room_code": room_code,
+        "users": serialize_mongo(users),
+        "all_ready": all_ready,
     }
 
 # Root endpoint for quick status check
@@ -389,7 +413,8 @@ def start_session(payload: Optional[SessionStart] = None, current_user=Depends(g
                     "users": {
                         "user_id": user_id,
                         "session_id": session_id,
-                        "player_name": display_name.strip()
+                        "player_name": display_name.strip(),
+                        "ready": False
                     }
                 },
                 "$setOnInsert": {"created_at": utc_now()}

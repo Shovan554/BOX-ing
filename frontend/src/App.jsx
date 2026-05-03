@@ -8,6 +8,7 @@ import MultiplayerArena from './pages/MultiplayerArena';
 import CreateRoom from './pages/CreateRoom';
 import Leaderboard from './pages/Leaderboard';
 import Settings from './pages/Settings';
+import Profile from './pages/Profile';
 import AuthPage from './pages/AuthPage';
 import Results from './pages/Results';
 import Intro from './components/Intro';
@@ -135,6 +136,7 @@ function App() {
               <Route path="/multiplayer-arena" element={<MultiplayerArena />} />
               <Route path="/create-room" element={<CreateRoom />} />
               <Route path="/leaderboard" element={<Leaderboard />} />
+              <Route path="/profile" element={<Profile />} />
               <Route path="/results" element={<Results />} />
             </Routes>
           </Suspense>
